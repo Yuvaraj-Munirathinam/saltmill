@@ -7,15 +7,15 @@ for 500GB+ CSV files.
 Quick start (simple API)::
 
     import saltmill
-    df = saltmill.read(spark, "s3://bucket/large.csv")
+    df = saltmill.read(spark, "abfss://container@account.dfs.core.windows.net/data/large.csv")
 
 Advanced API (full pipeline with write)::
 
     from saltmill import SaltmillProcessor, SaltmillConfig
 
     result = SaltmillProcessor(SaltmillConfig(
-        input_path="s3://bucket/data/*.csv",
-        output_path="s3://bucket/output/delta/",
+        input_path="abfss://raw@account.dfs.core.windows.net/data/*.csv",
+        output_path="abfss://curated@account.dfs.core.windows.net/output/delta/",
     )).process()
 """
 
