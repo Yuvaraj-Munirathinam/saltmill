@@ -1,89 +1,59 @@
-"""Module-level convenience function so users can call saltmill.read() directly."""
-
 from __future__ import annotations
+
+import logging
 from typing import TYPE_CHECKING
 
+from saltmill.exceptions import UnsupportedPathError
+
 if TYPE_CHECKING:
-    from pyspark.sql import SparkSession, DataFrame
+    from pyspark.sql import DataFrame, SparkSession
     from pyspark.sql.types import StructType
 
+    from saltmill.config import SaltmillConfig
 
-def read(
-    spark: "SparkSession",
-    paths: "str | list[str]",
-    *,
-    schema: "StructType | dict | None" = None,
-    partition_col: "str | list[str] | None" = None,
-    workers: int | None = None,
-    salt_buckets: int | None = None,
-    num_partitions: int | None = None,
-    hint_size_gb: float | None = None,
-    delimiter: str = ",",
-    encoding: str = "UTF-8",
-    null_value: str = "",
-    verbose: bool = True,
-) -> "DataFrame":
-    """
-    One-call interface for large CSV ingestion with automatic salt partitioning.
+log = logging.getLogger("saltmill")
 
-    Parameters
-    ----------
-    spark:
-        Active SparkSession.
-    paths:
-        Single path or list of paths to CSV file(s).
-    schema:
-        StructType, dict shorthand {"col": "type"}, or None to auto-infer.
-    partition_col:
-        Column(s) to co-locate in the repartition alongside the salt.
-    workers:
-        Cluster worker count (auto-detected when omitted).
-    salt_buckets:
-        Override auto-computed salt bucket count.
-    num_partitions:
-        Override total partition count.
-    hint_size_gb:
-        Total CSV size in GB — helps when Hadoop size detection fails.
-    delimiter:
-        CSV field separator (default ",").
-    encoding:
-        File encoding (default "UTF-8").
-    null_value:
-        String to treat as null (default "").
-    verbose:
-        Print tuning summary (default True).
+_SUPPORTED_SCHEMES = ("s3://", "s3a://", "abfss://", "gs://", "dbfs:/", "file://", "/")
 
-    Returns
-    -------
-    DataFrame
 
-    Examples
-    --------
-    ::
+class CsvReader:
+    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+        self._spark = spark
+        self._config = config
 
-        import saltmill
+    def read(self, schema: "StructType", paths: "list[str] | None" = None) -> "DataFrame":
+        """Read CSV file(s). Uses config.input_path when paths is not provided."""
+        cfg = self._config
+        read_paths = paths or [cfg.input_path]
+        normalized = [self._normalize_path(p) for p in read_paths]
+        log.info("[saltmill] reading CSV from %s", normalized)
 
-        df = saltmill.read(spark, "s3://bucket/large.csv")
+        options = {**cfg.csv_options, "inferSchema": "false"}
+        df = self._spark.read.schema(schema).options(**options).csv(normalized)
+        log.info("[saltmill] CSV reader configured (schema applied, no full-scan inference)")
+        return df
 
-        df = saltmill.read(
-            spark,
-            ["s3://a/b.csv", "s3://a/c.csv"],
-            schema={"id": "long", "region": "string", "revenue": "double"},
-            partition_col="region",
-            hint_size_gb=500,
-        )
-    """
-    from .core import SaltMill
+    def estimate_size_gb(self) -> float:
+        """Sum file sizes via Hadoop FileSystem API. Returns 0.0 on failure."""
+        cfg = self._config
+        try:
+            jvm = self._spark._jvm  # type: ignore[attr-defined]
+            sc = self._spark.sparkContext
+            hadoop_conf = sc._jsc.hadoopConfiguration()  # type: ignore[attr-defined]
+            path_obj = jvm.org.apache.hadoop.fs.Path(cfg.input_path)
+            fs = path_obj.getFileSystem(hadoop_conf)
+            status_list = fs.globStatus(path_obj)
+            if status_list is None:
+                return 0.0
+            return sum(s.getLen() for s in status_list) / (1024**3)
+        except Exception:
+            log.debug("[saltmill] Could not estimate file size via Hadoop FS", exc_info=True)
+            return 0.0
 
-    sm = SaltMill(spark, workers=workers, verbose=verbose)
-    return sm.read(
-        paths,
-        schema=schema,
-        partition_col=partition_col,
-        salt_buckets=salt_buckets,
-        num_partitions=num_partitions,
-        hint_size_gb=hint_size_gb,
-        delimiter=delimiter,
-        encoding=encoding,
-        null_value=null_value,
-    )
+    def _normalize_path(self, path: str) -> str:
+        stripped = path.strip()
+        if not any(stripped.startswith(s) for s in _SUPPORTED_SCHEMES):
+            raise UnsupportedPathError(
+                f"Unsupported path scheme: {stripped!r}. Supported: {_SUPPORTED_SCHEMES}"
+            )
+        return stripped

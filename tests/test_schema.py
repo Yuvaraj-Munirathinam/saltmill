@@ -1,5 +1,4 @@
-"""Tests for schema helpers — requires PySpark."""
-
+"""Tests for schema helpers — dict_to_struct requires PySpark."""
 import pytest
 
 pyspark = pytest.importorskip("pyspark", reason="pyspark not installed")

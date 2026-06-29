@@ -1,18 +1,21 @@
-"""
-Schema inference for large CSV files.
-
-Samples the first N rows using Spark to avoid reading the full file.
-Supports StructType passthrough, dict-based shorthand, and auto-inference.
-"""
-
 from __future__ import annotations
-from typing import TYPE_CHECKING
+
+import json
+import logging
+import time
+from typing import TYPE_CHECKING, Optional
+
+from saltmill.exceptions import SchemaInferenceError
+from saltmill.models import SchemaInfo
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
     from pyspark.sql.types import StructType
 
-# Dict shorthand: map friendly names → Spark SQL type strings
+    from saltmill.config import SaltmillConfig
+
+log = logging.getLogger("saltmill")
+
 _TYPE_ALIASES: dict[str, str] = {
     "str": "string",
     "string": "string",
@@ -29,28 +32,10 @@ _TYPE_ALIASES: dict[str, str] = {
     "decimal": "decimal(38,10)",
 }
 
-_INFER_SAMPLE_ROWS = 10_000
-
-
-def resolve_schema(spark: "SparkSession", path: str, schema) -> "StructType | None":
-    """
-    Resolve *schema* to a PySpark StructType or None.
-
-    Accepts:
-      - None                    → auto-infer from the first sample rows
-      - pyspark StructType      → returned as-is
-      - dict {col: type_str}    → converted via dict_to_struct()
-    """
-    if schema is None:
-        return _infer_from_sample(spark, path)
-    if isinstance(schema, dict):
-        return dict_to_struct(schema)
-    # Assume it's already a StructType
-    return schema
-
 
 def dict_to_struct(mapping: dict[str, str]) -> "StructType":
-    from pyspark.sql.types import StructType, StructField, _parse_datatype_string
+    """Convert a ``{"col": "type"}`` dict to a PySpark StructType."""
+    from pyspark.sql.types import StructField, StructType, _parse_datatype_string
 
     fields = []
     for col, type_hint in mapping.items():
@@ -59,15 +44,76 @@ def dict_to_struct(mapping: dict[str, str]) -> "StructType":
     return StructType(fields)
 
 
-def _infer_from_sample(spark: "SparkSession", path: str) -> "StructType":
-    """
-    Read a small sample with inferSchema=true to build the StructType cheaply.
-    Spark will only scan up to spark.sql.files.maxPartitionBytes of the first file.
-    """
-    sample_df = (
-        spark.read.option("header", "true")
-        .option("inferSchema", "true")
-        .option("samplingRatio", "0.001")   # 0.1% of rows — fast on huge files
-        .csv(path)
-    )
-    return sample_df.schema
+class SchemaInferrer:
+    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+        self._spark = spark
+        self._config = config
+
+    def resolve(self) -> SchemaInfo:
+        cfg = self._config
+        if cfg.schema is not None:
+            nullable = [f.name for f in cfg.schema.fields if f.nullable]
+            return SchemaInfo(
+                schema=cfg.schema,
+                inferred=False,
+                sample_rows=0,
+                inference_duration_seconds=0.0,
+                nullable_columns=nullable,
+            )
+        return self._infer_from_sample()
+
+    def _infer_from_sample(self) -> SchemaInfo:
+        cfg = self._config
+        t0 = time.monotonic()
+        try:
+            sample_df = (
+                self._spark.read
+                .options(**{**cfg.csv_options, "inferSchema": "true"})
+                .csv(cfg.input_path)
+                .limit(cfg.schema_sample_max_rows)
+            )
+            schema = sample_df.schema
+            row_count = sample_df.count()
+        except Exception as exc:
+            raise SchemaInferenceError(
+                f"Failed to infer schema from {cfg.input_path!r}: {exc}"
+            ) from exc
+
+        nullable = [f.name for f in schema.fields if f.nullable]
+        elapsed = time.monotonic() - t0
+        log.info(
+            "[saltmill] schema inferred: %d columns, %d sample rows, %.2fs",
+            len(schema.fields), row_count, elapsed,
+        )
+        return SchemaInfo(
+            schema=schema,
+            inferred=True,
+            sample_rows=row_count,
+            inference_duration_seconds=elapsed,
+            nullable_columns=nullable,
+        )
+
+    def serialize(self, info: SchemaInfo) -> str:
+        return json.dumps({
+            "schema_json": info.schema.json(),
+            "inferred": info.inferred,
+            "sample_rows": info.sample_rows,
+            "inference_duration_seconds": info.inference_duration_seconds,
+            "nullable_columns": info.nullable_columns,
+        })
+
+    def deserialize(self, raw: str) -> Optional[SchemaInfo]:
+        try:
+            from pyspark.sql.types import StructType as ST
+            d = json.loads(raw)
+            schema = ST.fromJson(json.loads(d["schema_json"]))
+            return SchemaInfo(
+                schema=schema,
+                inferred=d["inferred"],
+                sample_rows=d["sample_rows"],
+                inference_duration_seconds=d["inference_duration_seconds"],
+                nullable_columns=d["nullable_columns"],
+            )
+        except Exception:
+            log.debug("Failed to deserialize cached schema", exc_info=True)
+            return None
