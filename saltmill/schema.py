@@ -16,32 +16,38 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("saltmill")
 
-_TYPE_ALIASES: dict[str, str] = {
-    "str": "string",
-    "string": "string",
-    "int": "integer",
-    "integer": "integer",
-    "long": "long",
-    "bigint": "long",
-    "float": "float",
-    "double": "double",
-    "bool": "boolean",
-    "boolean": "boolean",
-    "date": "date",
-    "timestamp": "timestamp",
-    "decimal": "decimal(38,10)",
-}
+def _resolve_spark_type(type_hint: str):
+    from pyspark.sql.types import (
+        BooleanType, DateType, DecimalType, DoubleType,
+        FloatType, IntegerType, LongType, StringType, TimestampType,
+    )
+    _MAP = {
+        "str": StringType(), "string": StringType(),
+        "int": IntegerType(), "integer": IntegerType(),
+        "long": LongType(), "bigint": LongType(),
+        "float": FloatType(),
+        "double": DoubleType(),
+        "bool": BooleanType(), "boolean": BooleanType(),
+        "date": DateType(),
+        "timestamp": TimestampType(),
+        "decimal": DecimalType(38, 10),
+    }
+    t = type_hint.lower()
+    if t not in _MAP:
+        raise ValueError(
+            f"Unknown type {type_hint!r}. Supported: {list(_MAP)}"
+        )
+    return _MAP[t]
 
 
 def dict_to_struct(mapping: dict[str, str]) -> "StructType":
-    """Convert a ``{"col": "type"}`` dict to a PySpark StructType."""
-    from pyspark.sql.types import StructField, StructType, _parse_datatype_string
+    """Convert a ``{"col": "type"}`` dict to a PySpark StructType (no SparkSession needed)."""
+    from pyspark.sql.types import StructField, StructType
 
-    fields = []
-    for col, type_hint in mapping.items():
-        sql_type_str = _TYPE_ALIASES.get(type_hint.lower(), type_hint)
-        fields.append(StructField(col, _parse_datatype_string(sql_type_str), True))
-    return StructType(fields)
+    return StructType([
+        StructField(col, _resolve_spark_type(type_hint), True)
+        for col, type_hint in mapping.items()
+    ])
 
 
 class SchemaInferrer:
