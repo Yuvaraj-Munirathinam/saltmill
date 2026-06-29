@@ -31,8 +31,8 @@ class SaltmillProcessor:
         from saltmill import SaltmillProcessor, SaltmillConfig
 
         result = SaltmillProcessor(SaltmillConfig(
-            input_path="s3://bucket/large.csv",
-            output_path="s3://bucket/output/delta/",
+            input_path="abfss://raw@account.dfs.core.windows.net/data/large.csv",
+            output_path="abfss://curated@account.dfs.core.windows.net/output/delta/",
         )).process()
 
     Dry-run (inspect plan without writing)::

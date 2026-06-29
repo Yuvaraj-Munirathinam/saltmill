@@ -32,11 +32,14 @@ class SaltMill:
     ::
 
         sm = SaltMill(spark)
-        df = sm.read("s3://bucket/huge.csv")
+        df = sm.read("abfss://container@account.dfs.core.windows.net/data/huge.csv")
 
         sm = SaltMill(spark, workers=32)
         df = sm.read(
-            ["s3://bucket/part1.csv", "s3://bucket/part2.csv"],
+            [
+                "abfss://raw@account.dfs.core.windows.net/data/part1.csv",
+                "abfss://raw@account.dfs.core.windows.net/data/part2.csv",
+            ],
             schema={"id": "long", "region": "string", "amount": "double"},
             partition_col="region",
         )
@@ -181,11 +184,17 @@ def read(
 
         import saltmill
 
-        df = saltmill.read(spark, "s3://bucket/large.csv")
+        df = saltmill.read(
+            spark,
+            "abfss://container@account.dfs.core.windows.net/data/large.csv",
+        )
 
         df = saltmill.read(
             spark,
-            ["s3://a/b.csv", "s3://a/c.csv"],
+            [
+                "abfss://raw@account.dfs.core.windows.net/data/part1.csv",
+                "abfss://raw@account.dfs.core.windows.net/data/part2.csv",
+            ],
             schema={"id": "long", "region": "string", "revenue": "double"},
             partition_col="region",
         )

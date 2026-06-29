@@ -4,7 +4,7 @@ from saltmill.config import SaltmillConfig, WriteFormat, CompressionCodec
 
 
 def test_minimal_config():
-    cfg = SaltmillConfig(input_path="s3://bucket/data.csv")
+    cfg = SaltmillConfig(input_path="abfss://raw@account.dfs.core.windows.net/data/data.csv")
     assert cfg.output_path == ""
     assert cfg.write_format == WriteFormat.DELTA
     assert cfg.compression == CompressionCodec.SNAPPY
@@ -26,5 +26,5 @@ def test_invalid_salt_buckets_raises():
 
 
 def test_output_path_optional():
-    cfg = SaltmillConfig(input_path="s3://bucket/data.csv", output_path="")
+    cfg = SaltmillConfig(input_path="abfss://raw@account.dfs.core.windows.net/data/data.csv", output_path="")
     assert cfg.output_path == ""
