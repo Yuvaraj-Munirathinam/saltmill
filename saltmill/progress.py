@@ -10,6 +10,7 @@ log = logging.getLogger("saltmill")
 
 class ProgressReporter:
     STAGES = [
+        "file_split",
         "schema_inference",
         "cardinality_analysis",
         "skew_detection",

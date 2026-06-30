@@ -84,3 +84,39 @@ def test_from_dict_valid():
     from saltmill.processor import SaltmillProcessor
     proc = SaltmillProcessor.from_dict({"input_path": "/data/x.csv", "write_mode": "append"})
     assert proc._config.write_mode == "append"
+
+
+# ── Single-file splitting config ──────────────────────────────────────────────
+
+def test_split_defaults():
+    cfg = SaltmillConfig(input_path="/data/x.csv")
+    assert cfg.split_large_files is True
+    assert cfg.split_threshold_gb == 1.0
+    assert cfg.target_chunk_size_mb is None
+    assert cfg.staging_path is None
+
+
+def test_invalid_split_threshold_raises():
+    with pytest.raises(ValueError, match="split_threshold_gb"):
+        SaltmillConfig(input_path="/data/x.csv", split_threshold_gb=0)
+
+
+def test_invalid_target_chunk_size_raises():
+    with pytest.raises(ValueError, match="target_chunk_size_mb"):
+        SaltmillConfig(input_path="/data/x.csv", target_chunk_size_mb=0)
+
+
+def test_staging_path_scheme_validated():
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        SaltmillConfig(input_path="/data/x.csv", staging_path="ftp://host/staging/")
+
+
+def test_from_dict_accepts_split_keys():
+    from saltmill.processor import SaltmillProcessor
+    proc = SaltmillProcessor.from_dict({
+        "input_path": "/data/x.csv",
+        "split_threshold_gb": 5.0,
+        "staging_path": "/data/staging/",
+    })
+    assert proc._config.split_threshold_gb == 5.0
+    assert proc._config.staging_path == "/data/staging/"

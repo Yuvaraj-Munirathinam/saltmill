@@ -164,6 +164,48 @@ dfw = (
 )
 ```
 
+### Single large multiLine file splitting
+
+Spark cannot split a single CSV across tasks when `multiLine=true` — a record may
+span several physical lines, so the whole file is read by one task. When the input
+resolves to **one** large multiLine file, saltmill pre-splits it on the driver into
+many record-aligned chunks so the read parallelises:
+
+```python
+from saltmill import SaltmillProcessor, SaltmillConfig
+
+result = SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@account.dfs.core.windows.net/data/huge.csv",
+    output_path="abfss://curated@account.dfs.core.windows.net/output/delta/",
+    staging_path="abfss://raw@account.dfs.core.windows.net/_staging/",  # or set checkpoint_path
+    csv_options={"header": "true", "multiLine": "true", "quote": '"', "escape": '"'},
+)).process()
+```
+
+How the decision is made:
+
+| Input | Behaviour |
+|---|---|
+| Multiple data files | Read in parallel as-is — **no splitting** |
+| Single file, `multiLine=false` | Spark splits natively — **no splitting** |
+| Single file, `multiLine=true`, ≥ `split_threshold_gb` | **Split** into `target_chunk_size_mb` chunks |
+
+Splitting uses Python's `csv` reader, which tracks quote state — chunk boundaries
+fall only **between** complete records, so a quoted multiline field is never broken.
+Each chunk gets a copy of the header so every output file reads uniformly.
+
+| Config | Default | Description |
+|---|---|---|
+| `split_large_files` | `True` | Master switch |
+| `split_threshold_gb` | `1.0` | Minimum single-file size to trigger splitting |
+| `target_chunk_size_mb` | `max_partition_bytes_mb` (128) | Approximate chunk size |
+| `staging_path` | `<checkpoint_path>/_saltmill_split` | Where chunks are written |
+
+> Splitting reads the file once on the driver, so it is a one-time serial cost.
+> It is worthwhile for moderately large single files (unlocks parallelism for the
+> re-read and all downstream stages). For truly massive single files, producing
+> multiple files upstream avoids the driver pass entirely.
+
 ### Databricks-specific settings
 
 When running on Databricks, saltmill also sets:

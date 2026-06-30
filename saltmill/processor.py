@@ -14,6 +14,7 @@ from saltmill.salter import Salter
 from saltmill.schema import SchemaInferrer
 from saltmill.skew import SkewDetector
 from saltmill.spark_conf import SparkConfigurator
+from saltmill.splitter import FileSplitter
 from saltmill.writer import CsvWriter
 
 if TYPE_CHECKING:
@@ -65,6 +66,9 @@ class SaltmillProcessor:
         if cfg.checkpoint_path:
             checkpoint = CheckpointManager(spark, cfg.checkpoint_path)
             checkpoint.setup()
+
+        with self._reporter.stage("file_split"):
+            self._maybe_split(spark)
 
         with self._reporter.stage("schema_inference"):
             schema_info = self._resolve_schema(spark, checkpoint)
@@ -181,6 +185,8 @@ class SaltmillProcessor:
         "enable_auto_compact", "enable_adaptive_query", "write_format", "write_mode",
         "compression", "delta_partition_columns", "checkpoint_path",
         "checkpoint_interval", "log_level", "csv_options",
+        "split_large_files", "split_threshold_gb", "target_chunk_size_mb",
+        "staging_path",
     })
 
     @classmethod
@@ -190,6 +196,19 @@ class SaltmillProcessor:
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
         return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
+
+    def _maybe_split(self, spark: SparkSession) -> None:
+        """Pre-split a single large multiLine CSV into chunks, redirecting
+        input_path to the staging dir so all downstream stages read in parallel.
+        No-op for multi-file or non-multiLine inputs."""
+        cfg = self._config
+        if not cfg.split_large_files:
+            return
+        splitter = FileSplitter(spark, cfg)
+        staging = splitter.maybe_split()
+        if staging is not None:
+            log.info("[saltmill] input redirected to staged chunks: %s", staging)
+            cfg.input_path = staging
 
     def _resolve_schema(self, spark: SparkSession, checkpoint: Optional[CheckpointManager]):
         cfg = self._config

@@ -78,6 +78,16 @@ class SaltmillConfig:
     compression: CompressionCodec = CompressionCodec.SNAPPY
     delta_partition_columns: Optional[list[str]] = None
 
+    # ── Single-file splitting ─────────────────────────────────────────────────
+    # When the input resolves to one large multiLine CSV (which Spark cannot
+    # split across tasks), saltmill pre-splits it on the driver into many
+    # record-aligned chunks so the read parallelises. No effect on multi-file
+    # inputs or non-multiLine reads (Spark splits those natively).
+    split_large_files: bool = True
+    split_threshold_gb: float = 1.0
+    target_chunk_size_mb: Optional[int] = None  # defaults to max_partition_bytes_mb
+    staging_path: Optional[str] = None  # falls back to <checkpoint_path>/_saltmill_split
+
     # ── Fault tolerance ───────────────────────────────────────────────────────
     checkpoint_path: Optional[str] = None
     checkpoint_interval: int = 5
@@ -103,6 +113,10 @@ class SaltmillConfig:
             raise ValueError("schema_sample_fraction must be in (0, 1]")
         if self.salt_buckets is not None and self.salt_buckets < 1:
             raise ValueError("salt_buckets must be >= 1")
+        if self.split_threshold_gb <= 0:
+            raise ValueError("split_threshold_gb must be > 0")
+        if self.target_chunk_size_mb is not None and self.target_chunk_size_mb < 1:
+            raise ValueError("target_chunk_size_mb must be >= 1")
         if self.write_mode.lower() not in _VALID_WRITE_MODES:
             raise ValueError(
                 f"write_mode must be one of {sorted(_VALID_WRITE_MODES)}, got {self.write_mode!r}"
@@ -121,6 +135,8 @@ class SaltmillConfig:
             self._validate_path_scheme("output_path", self.output_path)
         if self.checkpoint_path:
             self._validate_path_scheme("checkpoint_path", self.checkpoint_path)
+        if self.staging_path:
+            self._validate_path_scheme("staging_path", self.staging_path)
         unknown_opts = set(self.csv_options) - _ALLOWED_CSV_OPTIONS
         if unknown_opts:
             raise ValueError(
