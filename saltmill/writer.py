@@ -23,10 +23,8 @@ class CsvWriter:
         if not cfg.output_path:
             raise ValueError("output_path must be set before calling write()")
 
-        log.info(
-            "[saltmill] writing to %s format=%s mode=%s",
-            cfg.output_path, cfg.write_format.value, cfg.write_mode,
-        )
+        log.debug("[saltmill] writing to %s format=%s mode=%s", cfg.output_path, cfg.write_format.value, cfg.write_mode)
+        log.info("[saltmill] writing format=%s mode=%s", cfg.write_format.value, cfg.write_mode)
 
         writer = (
             df.write.format(cfg.write_format.value)

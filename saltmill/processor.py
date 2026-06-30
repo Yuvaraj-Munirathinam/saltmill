@@ -173,8 +173,29 @@ class SaltmillProcessor:
 
     @classmethod
     def from_dict(cls, d: dict) -> SaltmillProcessor:
-        """Construct from a plain dict — handy for Databricks notebook widgets."""
-        return cls(SaltmillConfig(**d))
+        """
+        Construct from a plain dict of string values — handy for Databricks notebook widgets.
+
+        Only scalar string/int/float/bool fields are accepted. Non-string fields
+        (schema, progress_callback) are intentionally excluded to prevent injection
+        from untrusted widget input.
+        """
+        _SCALAR_FIELDS = {
+            "input_path", "output_path", "schema_sample_fraction", "schema_sample_max_rows",
+            "partition_keys", "cardinality_sample_fraction", "salt_buckets", "salt_column_name",
+            "worker_count", "cores_per_worker", "shuffle_partitions", "max_partition_bytes_mb",
+            "enable_optimize_write", "enable_auto_compact", "enable_adaptive_query",
+            "write_format", "write_mode", "compression", "delta_partition_columns",
+            "checkpoint_path", "checkpoint_interval", "log_level",
+        }
+        safe = {k: v for k, v in d.items() if k in _SCALAR_FIELDS}
+        unknown = set(d) - _SCALAR_FIELDS
+        if unknown:
+            import logging as _log
+            _log.getLogger("saltmill").warning(
+                "[saltmill] from_dict: ignoring unrecognised keys %s", sorted(unknown)
+            )
+        return cls(SaltmillConfig(**safe))
 
     def _resolve_schema(self, spark: SparkSession, checkpoint: Optional[CheckpointManager]):
         cfg = self._config

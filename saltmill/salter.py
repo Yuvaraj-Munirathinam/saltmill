@@ -44,6 +44,12 @@ class Salter:
             plan.target_partitions,
         )
 
+        if salt_col in df.columns:
+            raise ValueError(
+                f"salt_column_name {salt_col!r} already exists in the DataFrame. "
+                "Set a different SaltmillConfig.salt_column_name."
+            )
+
         df = df.withColumn(
             salt_col,
             F.pmod(F.monotonically_increasing_id(), F.lit(plan.salt_buckets)),

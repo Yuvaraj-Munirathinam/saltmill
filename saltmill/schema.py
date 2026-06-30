@@ -109,9 +109,16 @@ class SchemaInferrer:
         })
 
     def deserialize(self, raw: str) -> Optional[SchemaInfo]:
+        _MAX_SCHEMA_BYTES = 1 * 1024 * 1024  # 1 MB
+        if len(raw.encode("utf-8")) > _MAX_SCHEMA_BYTES:
+            log.warning("[saltmill] cached schema blob exceeds size limit, ignoring")
+            return None
         try:
             from pyspark.sql.types import StructType as ST
             d = json.loads(raw)
+            if not isinstance(d, dict) or "schema_json" not in d:
+                log.warning("[saltmill] cached schema blob has unexpected structure, ignoring")
+                return None
             schema = ST.fromJson(json.loads(d["schema_json"]))
             return SchemaInfo(
                 schema=schema,
