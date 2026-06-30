@@ -31,7 +31,7 @@ pip install saltmill
 ```python
 import saltmill
 
-df = saltmill.read(spark, "s3://my-bucket/large.csv")
+df = saltmill.read(spark, "abfss://raw@myaccount.dfs.core.windows.net/data/large.csv")
 ```
 
 That's it. saltmill will:
@@ -48,7 +48,7 @@ That's it. saltmill will:
 ```python
 import saltmill
 
-df = saltmill.read(spark, "s3://bucket/huge.csv")
+df = saltmill.read(spark, "abfss://raw@myaccount.dfs.core.windows.net/data/huge.csv")
 ```
 
 ### Class-based (more control)
@@ -57,7 +57,7 @@ df = saltmill.read(spark, "s3://bucket/huge.csv")
 from saltmill import SaltMill
 
 sm = SaltMill(spark, workers=32)
-df = sm.read("s3://bucket/huge.csv")
+df = sm.read("abfss://raw@myaccount.dfs.core.windows.net/data/huge.csv")
 ```
 
 ### Multiple files
@@ -65,7 +65,10 @@ df = sm.read("s3://bucket/huge.csv")
 ```python
 df = saltmill.read(
     spark,
-    ["s3://bucket/2024-01.csv", "s3://bucket/2024-02.csv"],
+    [
+        "abfss://raw@myaccount.dfs.core.windows.net/data/2024-01.csv",
+        "abfss://raw@myaccount.dfs.core.windows.net/data/2024-02.csv",
+    ],
     hint_size_gb=500,
 )
 ```
@@ -75,7 +78,7 @@ df = saltmill.read(
 ```python
 df = saltmill.read(
     spark,
-    "s3://bucket/sales.csv",
+    "abfss://raw@myaccount.dfs.core.windows.net/data/sales.csv",
     schema={
         "order_id":   "long",
         "region":     "string",
@@ -96,14 +99,14 @@ schema = StructType([
     StructField("name", StringType(), True),
 ])
 
-df = saltmill.read(spark, "s3://bucket/data.csv", schema=schema)
+df = saltmill.read(spark, "abfss://raw@myaccount.dfs.core.windows.net/data/data.csv", schema=schema)
 ```
 
 ### Preview tuning parameters without reading
 
 ```python
 sm = SaltMill(spark)
-params = sm.tune("s3://bucket/huge.csv", hint_size_gb=500)
+params = sm.tune("abfss://raw@myaccount.dfs.core.windows.net/data/huge.csv", hint_size_gb=500)
 print(params.summary())
 # saltmill tuning → file: 500.0 GB, workers: 64, salt_buckets: 64,
 #   partitions: 640, maxPartitionBytes: 64 MB
@@ -113,8 +116,8 @@ print(params.summary())
 
 ```python
 sm = SaltMill(spark)
-df = sm.read("s3://bucket/huge.csv", partition_col="region")
-sm.write_delta(df, "s3://bucket/delta/sales", partition_by="region")
+df = sm.read("abfss://raw@myaccount.dfs.core.windows.net/data/huge.csv", partition_col="region")
+sm.write_delta(df, "abfss://curated@myaccount.dfs.core.windows.net/delta/sales", partition_by="region")
 ```
 
 ## How it works

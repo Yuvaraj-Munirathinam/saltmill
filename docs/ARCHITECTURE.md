@@ -84,6 +84,106 @@ resolve + read + salt and returns the DataFrame. The simple path intentionally
 
 ---
 
+## Usage examples
+
+All paths use Azure Data Lake Storage Gen2 (`abfss://`), the primary target.
+
+### Full pipeline → Delta
+
+```python
+from saltmill import SaltmillProcessor, SaltmillConfig
+
+result = SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/large.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+)).process()
+
+print(result.total_rows, result.partition_plan.salt_buckets)
+```
+
+### Dry-run — inspect the plan without reading or writing
+
+```python
+plan = SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/large.csv",
+)).analyze()
+print(plan.salt_buckets, plan.target_partitions, plan.partition_keys)
+```
+
+### Explicit schema and partition keys
+
+```python
+SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/sales.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+    schema={"order_id": "long", "region": "string", "amount": "double"},
+    partition_keys=["region"],
+    salt_buckets=64,  # override auto-detection
+)).process()
+```
+
+### Large single multiLine file — enable splitting
+
+```python
+SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/huge.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+    staging_path="abfss://raw@myaccount.dfs.core.windows.net/_staging/",
+    csv_options={"header": "true", "multiLine": "true", "quote": '"', "escape": '"'},
+    split_threshold_gb=1.0,      # split when one file ≥ 1 GB
+    target_chunk_size_mb=128,    # ~128 MB chunks
+)).process()
+```
+
+### Resumable run with checkpointing
+
+```python
+SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/large.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+    checkpoint_path="abfss://raw@myaccount.dfs.core.windows.net/_checkpoints/job1/",
+)).process()
+# On rerun, completed stages (schema inference, salting) are skipped.
+```
+
+### Bounded execution with guardrails
+
+```python
+SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/large.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+    max_runtime_seconds=3600,    # cancel saltmill's jobs after 1 hour
+    split_max_file_gb=50,        # refuse driver-side split above 50 GB
+    count_output_rows=False,     # skip the final full-scan count
+)).process()
+```
+
+### From a dict (Databricks notebook widgets)
+
+```python
+proc = SaltmillProcessor.from_dict({
+    "input_path": dbutils.widgets.get("input_path"),
+    "output_path": dbutils.widgets.get("output_path"),
+    "write_mode": "append",
+})
+proc.process()
+# Only allowlisted keys are accepted; unknown keys raise ValueError.
+```
+
+### Simple API — just a DataFrame
+
+```python
+import saltmill
+
+df = saltmill.read(
+    spark,
+    "abfss://raw@myaccount.dfs.core.windows.net/data/large.csv",
+    partition_col="region",
+)
+```
+
+---
+
 ## The main flow — `SaltmillProcessor.process()`
 
 The Spark-heavy body runs inside `_runtime_guard` (optional wall-clock
