@@ -171,31 +171,25 @@ class SaltmillProcessor:
         reader = CsvReader(spark, cfg)
         return self._build_plan(cfg, salt_buckets, skew_reports, reader)
 
+    # Scalar-only fields accepted from untrusted widget input.
+    # progress_callback and schema are excluded intentionally.
+    _ALLOWED_FROM_DICT_KEYS = frozenset({
+        "input_path", "output_path", "schema_sample_fraction",
+        "schema_sample_max_rows", "partition_keys", "cardinality_sample_fraction",
+        "salt_buckets", "salt_column_name", "worker_count", "cores_per_worker",
+        "shuffle_partitions", "max_partition_bytes_mb", "enable_optimize_write",
+        "enable_auto_compact", "enable_adaptive_query", "write_format", "write_mode",
+        "compression", "delta_partition_columns", "checkpoint_path",
+        "checkpoint_interval", "log_level", "csv_options",
+    })
+
     @classmethod
     def from_dict(cls, d: dict) -> SaltmillProcessor:
-        """
-        Construct from a plain dict of string values — handy for Databricks notebook widgets.
-
-        Only scalar string/int/float/bool fields are accepted. Non-string fields
-        (schema, progress_callback) are intentionally excluded to prevent injection
-        from untrusted widget input.
-        """
-        _SCALAR_FIELDS = {
-            "input_path", "output_path", "schema_sample_fraction", "schema_sample_max_rows",
-            "partition_keys", "cardinality_sample_fraction", "salt_buckets", "salt_column_name",
-            "worker_count", "cores_per_worker", "shuffle_partitions", "max_partition_bytes_mb",
-            "enable_optimize_write", "enable_auto_compact", "enable_adaptive_query",
-            "write_format", "write_mode", "compression", "delta_partition_columns",
-            "checkpoint_path", "checkpoint_interval", "log_level",
-        }
-        safe = {k: v for k, v in d.items() if k in _SCALAR_FIELDS}
-        unknown = set(d) - _SCALAR_FIELDS
+        """Construct from a plain dict — handy for Databricks notebook widgets."""
+        unknown = set(d.keys()) - cls._ALLOWED_FROM_DICT_KEYS
         if unknown:
-            import logging as _log
-            _log.getLogger("saltmill").warning(
-                "[saltmill] from_dict: ignoring unrecognised keys %s", sorted(unknown)
-            )
-        return cls(SaltmillConfig(**safe))
+            raise ValueError(f"Unknown config keys: {sorted(unknown)}")
+        return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
 
     def _resolve_schema(self, spark: SparkSession, checkpoint: Optional[CheckpointManager]):
         cfg = self._config

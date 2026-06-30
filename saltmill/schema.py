@@ -82,7 +82,8 @@ class SchemaInferrer:
             row_count = sample_df.count()
         except Exception as exc:
             raise SchemaInferenceError(
-                f"Failed to infer schema from {cfg.input_path!r}: {exc}"
+                "Failed to infer schema from the configured input_path. "
+                "Check the path, credentials, and CSV options."
             ) from exc
 
         nullable = [f.name for f in schema.fields if f.nullable]
@@ -116,16 +117,33 @@ class SchemaInferrer:
         try:
             from pyspark.sql.types import StructType as ST
             d = json.loads(raw)
-            if not isinstance(d, dict) or "schema_json" not in d:
+            required_keys = {"schema_json", "inferred", "sample_rows",
+                             "inference_duration_seconds", "nullable_columns"}
+            if not isinstance(d, dict) or not required_keys.issubset(d.keys()):
                 log.warning("[saltmill] cached schema blob has unexpected structure, ignoring")
                 return None
+            if not isinstance(d["schema_json"], str):
+                log.debug("Cached schema_json is not a string; ignoring")
+                return None
+            if not isinstance(d["nullable_columns"], list):
+                log.debug("Cached nullable_columns is not a list; ignoring")
+                return None
             schema = ST.fromJson(json.loads(d["schema_json"]))
+            cfg_schema = self._config.schema
+            if cfg_schema is not None:
+                cached_names = {f.name for f in schema.fields}
+                expected_names = {f.name for f in cfg_schema.fields}
+                if cached_names != expected_names:
+                    log.warning(
+                        "[saltmill] cached schema fields do not match configured schema; re-inferring"
+                    )
+                    return None
             return SchemaInfo(
                 schema=schema,
-                inferred=d["inferred"],
-                sample_rows=d["sample_rows"],
-                inference_duration_seconds=d["inference_duration_seconds"],
-                nullable_columns=d["nullable_columns"],
+                inferred=bool(d["inferred"]),
+                sample_rows=int(d["sample_rows"]),
+                inference_duration_seconds=float(d["inference_duration_seconds"]),
+                nullable_columns=list(d["nullable_columns"]),
             )
         except Exception:
             log.debug("Failed to deserialize cached schema", exc_info=True)

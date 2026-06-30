@@ -28,3 +28,59 @@ def test_invalid_salt_buckets_raises():
 def test_output_path_optional():
     cfg = SaltmillConfig(input_path="abfss://raw@account.dfs.core.windows.net/data/data.csv", output_path="")
     assert cfg.output_path == ""
+
+
+# ── Security validation tests ─────────────────────────────────────────────────
+
+def test_invalid_write_mode_raises():
+    with pytest.raises(ValueError, match="write_mode"):
+        SaltmillConfig(input_path="/data/x.csv", write_mode="upsert")
+
+
+def test_valid_write_modes_accepted():
+    for mode in ("overwrite", "append", "ignore", "error", "errorifexists"):
+        cfg = SaltmillConfig(input_path="/data/x.csv", write_mode=mode)
+        assert cfg.write_mode == mode
+
+
+def test_invalid_log_level_raises():
+    with pytest.raises(ValueError, match="log_level"):
+        SaltmillConfig(input_path="/data/x.csv", log_level="VERBOSE")
+
+
+def test_valid_log_levels_accepted():
+    for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        cfg = SaltmillConfig(input_path="/data/x.csv", log_level=level)
+        assert cfg.log_level == level
+
+
+def test_unsupported_input_path_scheme_raises():
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        SaltmillConfig(input_path="ftp://host/file.csv")
+
+
+def test_unsupported_output_path_scheme_raises():
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        SaltmillConfig(input_path="/data/x.csv", output_path="ftp://host/out/")
+
+
+def test_unsupported_checkpoint_path_scheme_raises():
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        SaltmillConfig(input_path="/data/x.csv", checkpoint_path="http://host/cp/")
+
+
+def test_relative_output_path_raises():
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        SaltmillConfig(input_path="/data/x.csv", output_path="../../prod/out")
+
+
+def test_from_dict_unknown_key_raises():
+    from saltmill.processor import SaltmillProcessor
+    with pytest.raises(ValueError, match="Unknown config keys"):
+        SaltmillProcessor.from_dict({"input_path": "/data/x.csv", "progress_callback": "evil"})
+
+
+def test_from_dict_valid():
+    from saltmill.processor import SaltmillProcessor
+    proc = SaltmillProcessor.from_dict({"input_path": "/data/x.csv", "write_mode": "append"})
+    assert proc._config.write_mode == "append"

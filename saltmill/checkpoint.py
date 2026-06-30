@@ -38,7 +38,7 @@ class CheckpointManager:
             self._spark.sparkContext.setCheckpointDir(self._checkpoint_path)
             log.debug("[saltmill] checkpoint dir configured")
         except Exception as exc:
-            raise CheckpointError(f"Failed to set checkpoint dir: {exc}") from exc
+            raise CheckpointError("Failed to set checkpoint dir; check path and permissions") from exc
 
     def checkpoint_df(self, df: DataFrame, stage_name: str) -> DataFrame:
         _safe_name(stage_name, "stage_name")
