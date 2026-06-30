@@ -4,3 +4,6 @@
 dist/
 build/
 .pytest_cache/
+
+# Generated documentation artifacts (delivered separately, not versioned)
+*.docx
