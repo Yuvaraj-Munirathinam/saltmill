@@ -45,8 +45,9 @@ class Salter:
         )
 
         if salt_col in df.columns:
-            raise ValueError(
-                f"salt_column_name {salt_col!r} already exists in the DataFrame. "
+            from saltmill.exceptions import ConfigurationError
+            raise ConfigurationError(
+                f"salt_column_name={salt_col!r} already exists in the DataFrame. "
                 "Set a different SaltmillConfig.salt_column_name."
             )
 

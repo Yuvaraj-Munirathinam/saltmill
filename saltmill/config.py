@@ -8,16 +8,14 @@ from typing import TYPE_CHECKING, Callable, Optional
 if TYPE_CHECKING:
     from pyspark.sql.types import StructType
 
-_VALID_WRITE_MODES = {"overwrite", "append", "ignore", "error", "errorifexists"}
-_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-_VALID_LOG_LEVELS_LOWER = {v.lower() for v in _VALID_LOG_LEVELS}
+_VALID_WRITE_MODES = frozenset({"overwrite", "append", "ignore", "error", "errorifexists"})
+_VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _SALT_COL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 # Allowlist of CSV reader options that saltmill passes to Spark.
 # Restricting to known-safe keys prevents callers from redirecting reads via
-# options like pathGlobFilter, recursiveFileLookup, or modifiedBefore.
-_ALLOWED_CSV_OPTIONS = {
+# options like recursiveFileLookup or modifiedBefore.
+_ALLOWED_CSV_OPTIONS = frozenset({
     "header", "inferSchema", "sep", "delimiter", "encoding", "charset",
     "quote", "escape", "comment", "nullValue", "nanValue", "positiveInf",
     "negativeInf", "dateFormat", "timestampFormat", "timestampNTZFormat",
@@ -25,7 +23,9 @@ _ALLOWED_CSV_OPTIONS = {
     "locale", "lineSep", "pathGlobFilter", "modifiedBefore", "modifiedAfter",
     "ignoreLeadingWhiteSpace", "ignoreTrailingWhiteSpace",
     "maxColumns", "maxCharsPerColumn", "unescapedQuoteHandling",
-}
+})
+
+_SUPPORTED_SCHEMES = ("abfss://", "abfs://", "wasbs://", "dbfs:/", "s3://", "s3a://", "gs://", "file://", "/")
 
 
 class WriteFormat(str, Enum):
@@ -103,24 +103,35 @@ class SaltmillConfig:
             raise ValueError("schema_sample_fraction must be in (0, 1]")
         if self.salt_buckets is not None and self.salt_buckets < 1:
             raise ValueError("salt_buckets must be >= 1")
-        if self.write_mode not in _VALID_WRITE_MODES:
+        if self.write_mode.lower() not in _VALID_WRITE_MODES:
             raise ValueError(
-                f"write_mode must be one of {_VALID_WRITE_MODES}, got {self.write_mode!r}"
+                f"write_mode must be one of {sorted(_VALID_WRITE_MODES)}, got {self.write_mode!r}"
             )
         if self.log_level.upper() not in _VALID_LOG_LEVELS:
             raise ValueError(
-                f"log_level must be one of {_VALID_LOG_LEVELS}, got {self.log_level!r}"
+                f"log_level must be one of {sorted(_VALID_LOG_LEVELS)}, got {self.log_level!r}"
             )
         if not self.salt_column_name or not _SALT_COL_RE.match(self.salt_column_name):
             raise ValueError(
                 f"salt_column_name must match [A-Za-z_][A-Za-z0-9_]*, "
                 f"got {self.salt_column_name!r}"
             )
-        if self.checkpoint_path and ".." in self.checkpoint_path:
-            raise ValueError("checkpoint_path must not contain '..'")
+        self._validate_path_scheme("input_path", self.input_path)
+        if self.output_path:
+            self._validate_path_scheme("output_path", self.output_path)
+        if self.checkpoint_path:
+            self._validate_path_scheme("checkpoint_path", self.checkpoint_path)
         unknown_opts = set(self.csv_options) - _ALLOWED_CSV_OPTIONS
         if unknown_opts:
             raise ValueError(
                 f"csv_options contains unrecognised keys: {sorted(unknown_opts)}. "
                 f"Allowed keys: {sorted(_ALLOWED_CSV_OPTIONS)}"
+            )
+
+    def _validate_path_scheme(self, field_name: str, path: str) -> None:
+        stripped = path.strip()
+        if not any(stripped.startswith(s) for s in _SUPPORTED_SCHEMES):
+            raise ValueError(
+                f"{field_name} has unsupported scheme: {stripped!r}. "
+                f"Supported: {_SUPPORTED_SCHEMES}"
             )
