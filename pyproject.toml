@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "saltmill"
+name = "saltmill-spark"
 version = "0.2.0"
 description = "Efficient large-CSV processing for Apache Spark / Databricks with auto-salting, skew detection, and partition tuning"
 readme = "README.md"
