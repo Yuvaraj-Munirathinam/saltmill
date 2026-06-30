@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from typing import TYPE_CHECKING, Optional
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Generator, Optional
 
 from saltmill.cardinality import CardinalityAnalyzer
 from saltmill.checkpoint import CheckpointManager
@@ -14,6 +16,7 @@ from saltmill.salter import Salter
 from saltmill.schema import SchemaInferrer
 from saltmill.skew import SkewDetector
 from saltmill.spark_conf import SparkConfigurator
+from saltmill.splitter import FileSplitter
 from saltmill.writer import CsvWriter
 
 if TYPE_CHECKING:
@@ -49,8 +52,11 @@ class SaltmillProcessor:
         )
 
     def process(self, spark: Optional[SparkSession] = None) -> ProcessingResult:
-        """Run the full pipeline: schema → analysis → salting → write."""
-        t0 = time.monotonic()
+        """Run the full pipeline: schema → analysis → salting → write.
+
+        The Spark-heavy body runs under an optional wall-clock guard
+        (config.max_runtime_seconds); on timeout, saltmill's jobs are cancelled
+        and ProcessingTimeoutError is raised so the cluster is not tied up."""
         spark = self._resolve_spark(spark)
         cfg = self._config
 
@@ -61,10 +67,20 @@ class SaltmillProcessor:
                 "Use analyze() for a dry-run without writing."
             )
 
+        with self._runtime_guard(spark):
+            return self._run_pipeline(spark)
+
+    def _run_pipeline(self, spark: SparkSession) -> ProcessingResult:
+        t0 = time.monotonic()
+        cfg = self._config
+
         checkpoint: Optional[CheckpointManager] = None
         if cfg.checkpoint_path:
             checkpoint = CheckpointManager(spark, cfg.checkpoint_path)
             checkpoint.setup()
+
+        with self._reporter.stage("file_split"):
+            self._maybe_split(spark)
 
         with self._reporter.stage("schema_inference"):
             schema_info = self._resolve_schema(spark, checkpoint)
@@ -117,7 +133,14 @@ class SaltmillProcessor:
             cwriter = CsvWriter(spark, cfg)
             file_count = cwriter.write(output_df, plan)
 
-        total_rows = output_df.count()
+        # Counting re-evaluates the written data (an extra full pass when not
+        # checkpointed). Opt-out via count_output_rows to avoid the cost.
+        if cfg.count_output_rows:
+            total_rows = output_df.count()
+        else:
+            total_rows = -1
+            log.info("[saltmill] count_output_rows disabled; total_rows reported as -1")
+
         elapsed = time.monotonic() - t0
         return ProcessingResult(
             input_path=cfg.input_path,
@@ -181,6 +204,9 @@ class SaltmillProcessor:
         "enable_auto_compact", "enable_adaptive_query", "write_format", "write_mode",
         "compression", "delta_partition_columns", "checkpoint_path",
         "checkpoint_interval", "log_level", "csv_options",
+        "split_large_files", "split_threshold_gb", "target_chunk_size_mb",
+        "staging_path", "split_max_file_gb", "max_split_chunks",
+        "max_runtime_seconds", "count_output_rows",
     })
 
     @classmethod
@@ -190,6 +216,75 @@ class SaltmillProcessor:
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
         return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
+
+    def _maybe_split(self, spark: SparkSession) -> None:
+        """Pre-split a single large multiLine CSV into chunks, redirecting
+        input_path to the staging dir so all downstream stages read in parallel.
+        No-op for multi-file or non-multiLine inputs."""
+        cfg = self._config
+        if not cfg.split_large_files:
+            return
+        splitter = FileSplitter(spark, cfg)
+        staging = splitter.maybe_split()
+        if staging is not None:
+            log.info("[saltmill] input redirected to staged chunks: %s", staging)
+            cfg.input_path = staging
+
+    _JOB_GROUP = "saltmill"
+
+    @contextmanager
+    def _runtime_guard(self, spark: SparkSession) -> Generator[None, None, None]:
+        """Bound total runtime. When max_runtime_seconds is set, saltmill's Spark
+        jobs run in a dedicated job group; a watchdog cancels that group on
+        timeout so a hung/runaway action cannot burn cluster time indefinitely.
+
+        Note: the driver-side file split is not a Spark job, so cancellation
+        takes effect at the next Spark action — the split is bounded separately
+        by split_max_file_gb."""
+        seconds = self._config.max_runtime_seconds
+        if not seconds:
+            yield
+            return
+
+        from saltmill.exceptions import ProcessingTimeoutError
+
+        sc = spark.sparkContext
+        timed_out = threading.Event()
+
+        def _cancel() -> None:
+            timed_out.set()
+            try:
+                sc.cancelJobGroup(self._JOB_GROUP)
+                log.error("[saltmill] max_runtime_seconds=%s exceeded; cancelling jobs", seconds)
+            except Exception:
+                log.error("[saltmill] failed to cancel jobs on timeout", exc_info=True)
+
+        try:
+            sc.setJobGroup(self._JOB_GROUP, "saltmill large-CSV processing", True)
+        except Exception:
+            log.debug("[saltmill] could not set job group; timeout guard degraded", exc_info=True)
+
+        timer = threading.Timer(float(seconds), _cancel)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield
+        except Exception as exc:
+            if timed_out.is_set():
+                raise ProcessingTimeoutError(
+                    f"Processing exceeded max_runtime_seconds={seconds} and was cancelled."
+                ) from exc
+            raise
+        finally:
+            timer.cancel()
+            try:
+                sc.clearJobGroup()
+            except Exception:
+                log.debug("[saltmill] could not clear job group", exc_info=True)
+        if timed_out.is_set():
+            raise ProcessingTimeoutError(
+                f"Processing exceeded max_runtime_seconds={seconds} and was cancelled."
+            )
 
     def _resolve_schema(self, spark: SparkSession, checkpoint: Optional[CheckpointManager]):
         cfg = self._config

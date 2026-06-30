@@ -78,6 +78,31 @@ class SaltmillConfig:
     compression: CompressionCodec = CompressionCodec.SNAPPY
     delta_partition_columns: Optional[list[str]] = None
 
+    # ── Single-file splitting ─────────────────────────────────────────────────
+    # When the input resolves to one large multiLine CSV (which Spark cannot
+    # split across tasks), saltmill pre-splits it on the driver into many
+    # record-aligned chunks so the read parallelises. No effect on multi-file
+    # inputs or non-multiLine reads (Spark splits those natively).
+    split_large_files: bool = True
+    split_threshold_gb: float = 1.0
+    target_chunk_size_mb: Optional[int] = None  # defaults to max_partition_bytes_mb
+    staging_path: Optional[str] = None  # falls back to <checkpoint_path>/_saltmill_split
+    # Upper bound on driver-side splitting. The split reads the file serially on
+    # the driver, so a single file larger than this is refused (fail fast) rather
+    # than tying up the driver for hours — pre-split such inputs upstream.
+    split_max_file_gb: float = 50.0
+    # Guards against a tiny target_chunk_size producing a flood of small files.
+    max_split_chunks: int = 100_000
+
+    # ── Runaway-cost guardrails ───────────────────────────────────────────────
+    # Optional wall-clock ceiling. When set, saltmill's Spark jobs are cancelled
+    # and processing aborts if it runs longer — protects against a hung or
+    # runaway action burning cluster time indefinitely. None = no limit.
+    max_runtime_seconds: Optional[int] = None
+    # The final row count re-evaluates the written data (an extra full pass when
+    # not checkpointed). Disable to skip it; ProcessingResult.total_rows is then -1.
+    count_output_rows: bool = True
+
     # ── Fault tolerance ───────────────────────────────────────────────────────
     checkpoint_path: Optional[str] = None
     checkpoint_interval: int = 5
@@ -103,6 +128,19 @@ class SaltmillConfig:
             raise ValueError("schema_sample_fraction must be in (0, 1]")
         if self.salt_buckets is not None and self.salt_buckets < 1:
             raise ValueError("salt_buckets must be >= 1")
+        if self.split_threshold_gb <= 0:
+            raise ValueError("split_threshold_gb must be > 0")
+        if self.target_chunk_size_mb is not None and self.target_chunk_size_mb < 1:
+            raise ValueError("target_chunk_size_mb must be >= 1")
+        if self.split_max_file_gb < self.split_threshold_gb:
+            raise ValueError(
+                "split_max_file_gb must be >= split_threshold_gb "
+                f"(got max={self.split_max_file_gb}, threshold={self.split_threshold_gb})"
+            )
+        if self.max_split_chunks < 1:
+            raise ValueError("max_split_chunks must be >= 1")
+        if self.max_runtime_seconds is not None and self.max_runtime_seconds <= 0:
+            raise ValueError("max_runtime_seconds must be > 0 when set")
         if self.write_mode.lower() not in _VALID_WRITE_MODES:
             raise ValueError(
                 f"write_mode must be one of {sorted(_VALID_WRITE_MODES)}, got {self.write_mode!r}"
@@ -121,6 +159,8 @@ class SaltmillConfig:
             self._validate_path_scheme("output_path", self.output_path)
         if self.checkpoint_path:
             self._validate_path_scheme("checkpoint_path", self.checkpoint_path)
+        if self.staging_path:
+            self._validate_path_scheme("staging_path", self.staging_path)
         unknown_opts = set(self.csv_options) - _ALLOWED_CSV_OPTIONS
         if unknown_opts:
             raise ValueError(

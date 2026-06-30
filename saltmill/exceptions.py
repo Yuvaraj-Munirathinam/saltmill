@@ -23,3 +23,7 @@ class CheckpointError(SaltmillError):
 
 class UnsupportedPathError(SaltmillError):
     """Path scheme not recognized or not accessible."""
+
+
+class ProcessingTimeoutError(SaltmillError):
+    """Processing exceeded the configured max_runtime_seconds and was cancelled."""
