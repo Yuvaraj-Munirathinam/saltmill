@@ -26,6 +26,7 @@ from saltmill.config import CompressionCodec, SaltmillConfig, WriteFormat
 from saltmill.exceptions import (
     CheckpointError,
     ConfigurationError,
+    ProcessingTimeoutError,
     SaltmillError,
     SchemaInferenceError,
     SkewDetectionError,
@@ -53,6 +54,7 @@ __all__ = [
     "SkewDetectionError",
     "CheckpointError",
     "UnsupportedPathError",
+    "ProcessingTimeoutError",
     # Simple API
     "SaltMill",
     "read",

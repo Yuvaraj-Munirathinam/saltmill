@@ -6,7 +6,25 @@ records, so quoted multiline fields are never broken — without needing Spark.
 import csv
 import io
 
-from saltmill.splitter import Sink, build_dialect, split_records
+import pytest
+
+from saltmill.config import SaltmillConfig
+from saltmill.exceptions import ConfigurationError
+from saltmill.splitter import (
+    Sink,
+    build_dialect,
+    plan_split,
+    projected_chunk_count,
+    split_records,
+)
+
+_GB = 1024 ** 3
+
+
+def _cfg(**kw):
+    base = dict(input_path="/data/x.csv", csv_options={"header": "true", "multiLine": "true"})
+    base.update(kw)
+    return SaltmillConfig(**base)
 
 
 class _StringSink(Sink):
@@ -132,3 +150,50 @@ def test_header_only_input_produces_no_chunks():
     # Header present but zero data rows → nothing to write.
     count, sinks = _run("id,v\n", target_bytes=100, has_header=True)
     assert count == 0
+
+
+# ── Split-decision guardrails (pure, no Spark) ────────────────────────────────
+
+def test_plan_split_single_large_multiline_splits():
+    action, path, size = plan_split(_cfg(), [("/data/big.csv", int(3 * _GB))])
+    assert action == "split"
+    assert path == "/data/big.csv"
+    assert size == int(3 * _GB)
+
+
+def test_plan_split_multi_file_skips():
+    files = [("/data/a.csv", int(3 * _GB)), ("/data/b.csv", int(3 * _GB))]
+    assert plan_split(_cfg(), files)[0] == "skip"
+
+
+def test_plan_split_non_multiline_skips():
+    cfg = _cfg(csv_options={"header": "true", "multiLine": "false"})
+    assert plan_split(cfg, [("/data/big.csv", int(3 * _GB))])[0] == "skip"
+
+
+def test_plan_split_below_threshold_skips():
+    cfg = _cfg(split_threshold_gb=5.0)
+    assert plan_split(cfg, [("/data/big.csv", int(3 * _GB))])[0] == "skip"
+
+
+def test_plan_split_disabled_skips():
+    cfg = _cfg(split_large_files=False)
+    assert plan_split(cfg, [("/data/big.csv", int(3 * _GB))])[0] == "skip"
+
+
+def test_plan_split_above_max_file_raises():
+    cfg = _cfg(split_max_file_gb=10.0)
+    with pytest.raises(ConfigurationError, match="above split_max_file_gb"):
+        plan_split(cfg, [("/data/huge.csv", int(20 * _GB))])
+
+
+def test_projected_chunk_count():
+    assert projected_chunk_count(0, 100) == 1
+    assert projected_chunk_count(100, 100) == 1
+    assert projected_chunk_count(101, 100) == 2
+    assert projected_chunk_count(10 * _GB, 128 * 1024 * 1024) == 80
+
+
+def test_projected_chunk_count_rejects_zero_target():
+    with pytest.raises(ValueError):
+        projected_chunk_count(100, 0)

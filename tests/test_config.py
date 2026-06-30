@@ -120,3 +120,33 @@ def test_from_dict_accepts_split_keys():
     })
     assert proc._config.split_threshold_gb == 5.0
     assert proc._config.staging_path == "/data/staging/"
+
+
+# ── Runaway-cost guardrails ───────────────────────────────────────────────────
+
+def test_guardrail_defaults():
+    cfg = SaltmillConfig(input_path="/data/x.csv")
+    assert cfg.split_max_file_gb == 50.0
+    assert cfg.max_split_chunks == 100_000
+    assert cfg.max_runtime_seconds is None
+    assert cfg.count_output_rows is True
+
+
+def test_max_file_below_threshold_raises():
+    with pytest.raises(ValueError, match="split_max_file_gb must be >="):
+        SaltmillConfig(input_path="/data/x.csv", split_threshold_gb=10.0, split_max_file_gb=5.0)
+
+
+def test_invalid_max_split_chunks_raises():
+    with pytest.raises(ValueError, match="max_split_chunks"):
+        SaltmillConfig(input_path="/data/x.csv", max_split_chunks=0)
+
+
+def test_invalid_max_runtime_seconds_raises():
+    with pytest.raises(ValueError, match="max_runtime_seconds"):
+        SaltmillConfig(input_path="/data/x.csv", max_runtime_seconds=0)
+
+
+def test_valid_max_runtime_seconds():
+    cfg = SaltmillConfig(input_path="/data/x.csv", max_runtime_seconds=3600)
+    assert cfg.max_runtime_seconds == 3600

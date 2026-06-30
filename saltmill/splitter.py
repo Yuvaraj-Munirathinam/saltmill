@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 from typing import TYPE_CHECKING, Callable, Optional
 
 from saltmill.exceptions import ConfigurationError
@@ -30,8 +31,50 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("saltmill")
 
+_GB = 1024 ** 3
+
 # Files Spark/commit protocols leave behind that are not CSV data.
 _NON_DATA_PREFIXES = (".", "_")
+
+
+def plan_split(cfg: "SaltmillConfig", data_files: list[tuple[str, int]]) -> tuple[str, Optional[str], Optional[int]]:
+    """Pure split decision (no Spark/IO) so it is unit-testable.
+
+    Returns one of:
+      ("split", path, size) — one large multiLine file that should be split
+      ("skip",  None, None) — leave the input to Spark (multi-file / non-multiLine / small)
+    Raises ConfigurationError when a single file exceeds split_max_file_gb, so a
+    runaway driver-side read is refused up front rather than grinding for hours.
+    """
+    if not cfg.split_large_files:
+        return ("skip", None, None)
+    if len(data_files) != 1:
+        # 0 → downstream read raises a clear error; >1 → already parallelisable.
+        return ("skip", None, None)
+    multiline = str(cfg.csv_options.get("multiLine", "false")).lower() == "true"
+    if not multiline:
+        # Spark splits a single non-multiLine CSV natively via maxPartitionBytes.
+        return ("skip", None, None)
+    path, size = data_files[0]
+    size_gb = size / _GB
+    if size_gb < cfg.split_threshold_gb:
+        return ("skip", None, None)
+    if size_gb > cfg.split_max_file_gb:
+        raise ConfigurationError(
+            f"Single multiLine file is {size_gb:.1f} GB, above split_max_file_gb="
+            f"{cfg.split_max_file_gb} GB. Driver-side splitting reads the file "
+            "serially and would tie up the driver. Pre-split this file upstream "
+            "(e.g. write it as multiple files), or raise split_max_file_gb if you "
+            "accept the driver cost."
+        )
+    return ("split", path, size)
+
+
+def projected_chunk_count(file_size: int, target_bytes: int) -> int:
+    """Upper estimate of chunks a file of ``file_size`` yields at ``target_bytes``."""
+    if target_bytes <= 0:
+        raise ValueError("target_bytes must be > 0")
+    return max(1, math.ceil(file_size / target_bytes))
 
 
 def build_dialect(csv_options: dict[str, str]) -> dict:
@@ -248,23 +291,6 @@ class FileSplitter:
             out.append((st.getPath().toString(), int(st.getLen())))
         return out
 
-    def should_split(self, data_files: list[tuple[str, int]]) -> bool:
-        """Split only when: enabled, exactly one data file, multiLine is on
-        (Spark can't split it natively), and it exceeds the threshold."""
-        cfg = self._config
-        if not cfg.split_large_files:
-            return False
-        if len(data_files) != 1:
-            # 0 → let the downstream read raise a clear error.
-            # >1 → already parallelisable; trust Spark.
-            return False
-        multiline = str(cfg.csv_options.get("multiLine", "false")).lower() == "true"
-        if not multiline:
-            # Spark splits a single non-multiline CSV natively via maxPartitionBytes.
-            return False
-        size_gb = data_files[0][1] / (1024 ** 3)
-        return size_gb >= cfg.split_threshold_gb
-
     def _resolve_staging_path(self) -> str:
         cfg = self._config
         if cfg.staging_path:
@@ -282,6 +308,15 @@ class FileSplitter:
         staging = self._resolve_staging_path()
         target_mb = cfg.target_chunk_size_mb or cfg.max_partition_bytes_mb
         target_bytes = target_mb * 1024 * 1024
+
+        projected = projected_chunk_count(file_size, target_bytes)
+        if projected > cfg.max_split_chunks:
+            raise ConfigurationError(
+                f"Splitting this file at {target_mb} MB chunks would create ~{projected} "
+                f"files, above max_split_chunks={cfg.max_split_chunks}. Increase "
+                "target_chunk_size_mb to avoid a small-file explosion."
+            )
+
         encoding = cfg.csv_options.get("encoding", "UTF-8")
         has_header = str(cfg.csv_options.get("header", "false")).lower() == "true"
         dialect = build_dialect(cfg.csv_options)
@@ -318,14 +353,18 @@ class FileSplitter:
 
     def maybe_split(self) -> Optional[str]:
         """If the configured input warrants splitting, do it and return the
-        staging path; otherwise return None (caller keeps the original path)."""
+        staging path; otherwise return None (caller keeps the original path).
+
+        Raises ConfigurationError when a single multiLine file exceeds
+        split_max_file_gb (refused up front to protect the driver)."""
         data_files = self.list_data_files(self._config.input_path)
-        if not self.should_split(data_files):
+        action, path, size = plan_split(self._config, data_files)
+        if action == "skip":
             if len(data_files) > 1:
                 log.info(
                     "[saltmill] %d input files detected; reading in parallel without splitting",
                     len(data_files),
                 )
             return None
-        path, size = data_files[0]
+        assert path is not None and size is not None
         return self.split(path, size)
