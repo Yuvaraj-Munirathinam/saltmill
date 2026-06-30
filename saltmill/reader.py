@@ -26,7 +26,8 @@ class CsvReader:
         cfg = self._config
         read_paths = paths or [cfg.input_path]
         normalized = [self._normalize_path(p) for p in read_paths]
-        log.info("[saltmill] reading CSV from %s", normalized)
+        log.debug("[saltmill] reading CSV from %s", normalized)
+        log.info("[saltmill] reading %d CSV path(s)", len(normalized))
 
         options = {**cfg.csv_options, "inferSchema": "false"}
         df = self._spark.read.schema(schema).options(**options).csv(normalized)
