@@ -28,6 +28,35 @@ log = logging.getLogger("saltmill")
 _NON_DATA_PREFIXES = (".", "_")
 
 
+_CACHE_SUPPORT: dict[int, bool] = {}
+
+
+def supports_cache(spark: "SparkSession") -> bool:
+    """True when DataFrame.cache()/persist() works on this session.
+
+    Serverless compute rejects persist with NOT_SUPPORTED_WITH_SERVERLESS
+    ('PERSIST TABLE is not supported'). Probed once per session with a trivial
+    range, then cached.
+    """
+    key = id(spark)
+    if key in _CACHE_SUPPORT:
+        return _CACHE_SUPPORT[key]
+    result = False
+    try:
+        probe = spark.range(1).cache()
+        probe.count()  # forces the persist; raises on serverless
+        try:
+            probe.unpersist()
+        except Exception:
+            pass
+        result = True
+    except Exception:
+        log.debug("[saltmill] cache/persist not supported on this session", exc_info=True)
+        result = False
+    _CACHE_SUPPORT[key] = result
+    return result
+
+
 def has_jvm(spark: "SparkSession") -> bool:
     """True when the driver JVM is directly accessible (single-user/job cluster).
 

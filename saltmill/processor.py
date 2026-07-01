@@ -102,13 +102,7 @@ class SaltmillProcessor:
             cfg.cores_per_worker = configurator.detect_cores_per_worker()
 
         # Single pre-sample shared by cardinality and skew analysis.
-        sample_df = (
-            spark.read.schema(schema_info.schema)
-            .options(**{**cfg.csv_options, "inferSchema": "false"})
-            .csv(cfg.input_path)
-            .sample(withReplacement=False, fraction=0.05, seed=42)
-            .cache()
-        )
+        sample_df, sample_cached = self._build_sample(spark, schema_info.schema)
 
         with self._reporter.stage("cardinality_analysis"):
             if cfg.partition_keys is None:
@@ -120,7 +114,8 @@ class SaltmillProcessor:
             skew_reports = detector.analyze(sample_df, cfg.partition_keys)
             salt_buckets = cfg.salt_buckets or detector.pick_salt_buckets(skew_reports)
 
-        sample_df.unpersist()
+        if sample_cached:
+            sample_df.unpersist()
 
         reader = CsvReader(spark, cfg)
         plan = self._build_plan(cfg, salt_buckets, skew_reports, reader)
@@ -180,13 +175,7 @@ class SaltmillProcessor:
         if cfg.cores_per_worker == 8:
             cfg.cores_per_worker = configurator.detect_cores_per_worker()
 
-        sample_df = (
-            spark.read.schema(schema_info.schema)
-            .options(**{**cfg.csv_options, "inferSchema": "false"})
-            .csv(cfg.input_path)
-            .sample(withReplacement=False, fraction=0.05, seed=42)
-            .cache()
-        )
+        sample_df, sample_cached = self._build_sample(spark, schema_info.schema)
 
         with self._reporter.stage("cardinality_analysis"):
             if cfg.partition_keys is None:
@@ -198,7 +187,8 @@ class SaltmillProcessor:
             skew_reports = detector.analyze(sample_df, cfg.partition_keys)
             salt_buckets = cfg.salt_buckets or detector.pick_salt_buckets(skew_reports)
 
-        sample_df.unpersist()
+        if sample_cached:
+            sample_df.unpersist()
 
         reader = CsvReader(spark, cfg)
         return self._build_plan(cfg, salt_buckets, skew_reports, reader)
@@ -225,6 +215,28 @@ class SaltmillProcessor:
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
         return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
+
+    def _build_sample(self, spark, schema):
+        """Build the 5% sample shared by cardinality and skew analysis.
+
+        Caches it when the session supports persist (serverless rejects PERSIST
+        TABLE); returns (sample_df, cached) so the caller unpersists only when
+        it actually cached."""
+        from saltmill.spark_env import supports_cache
+
+        cfg = self._config
+        sample = (
+            spark.read.schema(schema)
+            .options(**{**cfg.csv_options, "inferSchema": "false"})
+            .csv(cfg.input_path)
+            .sample(withReplacement=False, fraction=0.05, seed=42)
+        )
+        cached = supports_cache(spark)
+        if cached:
+            sample = sample.cache()
+        else:
+            log.debug("[saltmill] persist unsupported (serverless?); sample not cached")
+        return sample, cached
 
     def _maybe_split(self, spark: SparkSession) -> None:
         """Pre-split a single large multiLine CSV into chunks, redirecting
