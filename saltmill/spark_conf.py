@@ -55,11 +55,16 @@ class SparkConfigurator:
         return settings
 
     def detect_worker_count(self) -> int:
-        sc = self._spark.sparkContext
+        # sparkContext is unavailable on Spark Connect (shared/serverless); the
+        # access itself raises, so it must stay inside the try.
         try:
+            sc = self._spark.sparkContext
             return max(1, sc.defaultParallelism // self._config.cores_per_worker)
         except Exception:
-            log.debug("[saltmill] Could not detect worker count", exc_info=True)
+            log.debug(
+                "[saltmill] worker count unavailable (Spark Connect?); defaulting to 4",
+                exc_info=True,
+            )
             return 4
 
     def detect_cores_per_worker(self) -> int:

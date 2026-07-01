@@ -74,10 +74,19 @@ class SaltmillProcessor:
         t0 = time.monotonic()
         cfg = self._config
 
+        from saltmill.spark_env import has_jvm
+
         checkpoint: Optional[CheckpointManager] = None
         if cfg.checkpoint_path:
-            checkpoint = CheckpointManager(spark, cfg.checkpoint_path)
-            checkpoint.setup()
+            if has_jvm(spark):
+                checkpoint = CheckpointManager(spark, cfg.checkpoint_path)
+                checkpoint.setup()
+            else:
+                log.warning(
+                    "[saltmill] checkpoint_path is set but checkpointing requires the "
+                    "driver JVM, which is unavailable on shared/serverless clusters; "
+                    "proceeding without checkpointing"
+                )
 
         with self._reporter.stage("file_split"):
             self._maybe_split(spark)
@@ -243,6 +252,18 @@ class SaltmillProcessor:
         by split_max_file_gb."""
         seconds = self._config.max_runtime_seconds
         if not seconds:
+            yield
+            return
+
+        from saltmill.spark_env import has_jvm
+
+        if not has_jvm(spark):
+            # cancelJobGroup needs the driver JVM (unavailable on Spark Connect).
+            log.warning(
+                "[saltmill] max_runtime_seconds is set but the runtime watchdog requires "
+                "the driver JVM, which is unavailable on shared/serverless clusters; "
+                "running without a wall-clock guard"
+            )
             yield
             return
 

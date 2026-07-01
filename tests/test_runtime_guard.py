@@ -35,6 +35,23 @@ def _proc(**kw):
     return SaltmillProcessor(cfg), _FakeSpark()
 
 
+class _SparkConnectNoJvm:
+    """Shared/serverless: sparkContext access raises."""
+
+    @property
+    def sparkContext(self):
+        raise RuntimeError("JVM_ATTRIBUTE_NOT_SUPPORTED")
+
+
+def test_guard_skipped_without_jvm():
+    # max_runtime_seconds is set, but no JVM → watchdog degrades to a no-op
+    # (warning logged) instead of crashing on sparkContext access.
+    cfg = SaltmillConfig(input_path="/data/x.csv", max_runtime_seconds=3600)
+    proc = SaltmillProcessor(cfg)
+    with proc._runtime_guard(_SparkConnectNoJvm()):
+        pass  # must not raise
+
+
 def test_guard_noop_when_disabled():
     proc, spark = _proc(max_runtime_seconds=None)
     with proc._runtime_guard(spark):

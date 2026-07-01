@@ -1,26 +1,27 @@
 """
-Driver-side splitting of a single large CSV into many record-aligned chunks.
+Splitting of a single large multiLine CSV into many files, so the read
+parallelises.
 
-Spark cannot split a single CSV file across tasks when ``multiLine=true`` —
-a record may span several physical lines, so there is no safe byte offset to
-seek to. The whole file is read by one task, serialising the most expensive
-stage of the pipeline.
+Spark cannot split a single CSV across tasks when ``multiLine=true`` — a record
+may span several physical lines, so the whole file is read by one task. This
+module re-emits that one file as N files under a staging path; Spark then reads
+the N files in parallel (multiLine still prevents splitting *within* a file, but
+N files run on up to N tasks).
 
-This module solves that by streaming the file once on the driver with Python's
-``csv`` reader (which tracks quote state and therefore never breaks a record),
-re-emitting it as N smaller chunk files under a staging path. Spark then reads
-the staging directory with full parallelism.
+The split is **Spark-native**: it uses only the DataFrame API (read → repartition
+→ write), so it works on every Databricks cluster type — single-user, job,
+shared, and serverless (Spark Connect). Record integrity is guaranteed by
+Spark's own CSV reader/writer: rows are parsed correctly under multiLine and are
+never split across output files.
 
-The record-splitting algorithm (:func:`split_records`) is filesystem-agnostic
-and unit-testable; the Hadoop streaming wrappers live in :class:`FileSplitter`.
+The decision logic (:func:`plan_split`) is a pure function and unit-testable
+without Spark.
 """
 from __future__ import annotations
 
-import csv
-import io
 import logging
 import math
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Optional
 
 from saltmill.exceptions import ConfigurationError
 
@@ -33,8 +34,12 @@ log = logging.getLogger("saltmill")
 
 _GB = 1024 ** 3
 
-# Files Spark/commit protocols leave behind that are not CSV data.
-_NON_DATA_PREFIXES = (".", "_")
+# CSV options that are meaningful when writing the staged chunk files.
+_CSV_WRITE_OPTIONS = frozenset({
+    "header", "sep", "delimiter", "quote", "escape", "encoding", "charset",
+    "nullValue", "emptyValue", "dateFormat", "timestampFormat", "lineSep",
+    "quoteAll", "escapeQuotes",
+})
 
 
 def plan_split(cfg: "SaltmillConfig", data_files: list[tuple[str, int]]) -> tuple[str, Optional[str], Optional[int]]:
@@ -43,8 +48,7 @@ def plan_split(cfg: "SaltmillConfig", data_files: list[tuple[str, int]]) -> tupl
     Returns one of:
       ("split", path, size) — one large multiLine file that should be split
       ("skip",  None, None) — leave the input to Spark (multi-file / non-multiLine / small)
-    Raises ConfigurationError when a single file exceeds split_max_file_gb, so a
-    runaway driver-side read is refused up front rather than grinding for hours.
+    Raises ConfigurationError when a single file exceeds split_max_file_gb.
     """
     if not cfg.split_large_files:
         return ("skip", None, None)
@@ -62,234 +66,28 @@ def plan_split(cfg: "SaltmillConfig", data_files: list[tuple[str, int]]) -> tupl
     if size_gb > cfg.split_max_file_gb:
         raise ConfigurationError(
             f"Single multiLine file is {size_gb:.1f} GB, above split_max_file_gb="
-            f"{cfg.split_max_file_gb} GB. Driver-side splitting reads the file "
-            "serially and would tie up the driver. Pre-split this file upstream "
-            "(e.g. write it as multiple files), or raise split_max_file_gb if you "
-            "accept the driver cost."
+            f"{cfg.split_max_file_gb} GB. Splitting reads the file once in a single "
+            "task (multiLine cannot be parallelised); above this size pre-split the "
+            "file upstream, or raise split_max_file_gb if you accept the cost."
         )
     return ("split", path, size)
 
 
 def projected_chunk_count(file_size: int, target_bytes: int) -> int:
-    """Upper estimate of chunks a file of ``file_size`` yields at ``target_bytes``."""
+    """Number of chunks a file of ``file_size`` yields at ``target_bytes``."""
     if target_bytes <= 0:
         raise ValueError("target_bytes must be > 0")
     return max(1, math.ceil(file_size / target_bytes))
 
 
-def build_dialect(csv_options: dict[str, str]) -> dict:
-    """Translate Spark CSV options into Python ``csv`` dialect kwargs."""
-    delim = csv_options.get("sep") or csv_options.get("delimiter") or ","
-    if len(delim) != 1:
-        raise ConfigurationError(
-            f"File splitting requires a single-character delimiter, got {delim!r}. "
-            "Disable split_large_files or pre-split the input."
-        )
-    quote = csv_options.get("quote", '"')
-    escape = csv_options.get("escape")
-    dialect: dict = {"delimiter": delim, "quotechar": quote}
-    if escape and escape != quote:
-        # Distinct escape char (e.g. backslash) → no doubled-quote escaping.
-        dialect["escapechar"] = escape
-        dialect["doublequote"] = False
-    else:
-        # escape == quote (the RFC 4180 "" convention) or unset.
-        dialect["doublequote"] = True
-    return dialect
-
-
-class _RowFormatter:
-    """Serialise a single CSV row to bytes using the configured dialect."""
-
-    def __init__(self, dialect: dict, encoding: str) -> None:
-        self._encoding = encoding
-        self._buf = io.StringIO()
-        self._writer = csv.writer(self._buf, lineterminator="\n", **dialect)
-
-    def to_bytes(self, row: list[str]) -> bytes:
-        self._buf.seek(0)
-        self._buf.truncate(0)
-        self._writer.writerow(row)
-        return self._buf.getvalue().encode(self._encoding)
-
-
-class Sink:
-    """A chunk destination. Subclasses persist bytes; here is the contract."""
-
-    def write_row(self, data: bytes) -> int:  # pragma: no cover - interface
-        raise NotImplementedError
-
-    def close(self) -> None:  # pragma: no cover - interface
-        raise NotImplementedError
-
-
-def split_records(
-    text_in: io.TextIOBase,
-    make_sink: Callable[[int], Sink],
-    target_bytes: int,
-    has_header: bool,
-    dialect: dict,
-    encoding: str = "UTF-8",
-) -> int:
-    """
-    Read CSV records from ``text_in`` and fan them out into chunk sinks.
-
-    A chunk boundary is only taken *between* complete records, so a quoted
-    multiline field is never split. Every chunk is prefixed with the header
-    (when present) so each output file is independently readable by Spark.
-
-    ``make_sink(index)`` is called to open each new chunk. Returns the number
-    of chunks written. Caller owns sink lifecycle only insofar as this function
-    closes each sink before opening the next and closes the final one.
-    """
-    if target_bytes <= 0:
-        raise ValueError("target_bytes must be > 0")
-
-    reader = csv.reader(text_in, **dialect)
-    fmt = _RowFormatter(dialect, encoding)
-
-    header_bytes: Optional[bytes] = None
-    if has_header:
-        header_row = next(reader, None)
-        if header_row is not None:
-            header_bytes = fmt.to_bytes(header_row)
-
-    sink: Optional[Sink] = None
-    written = 0
-    chunk_count = 0
-
-    def open_chunk() -> None:
-        nonlocal sink, written, chunk_count
-        if sink is not None:
-            sink.close()
-        sink = make_sink(chunk_count)
-        chunk_count += 1
-        written = 0
-        if header_bytes is not None:
-            written += sink.write_row(header_bytes)
-
-    for row in reader:
-        if sink is None or written >= target_bytes:
-            open_chunk()
-        assert sink is not None
-        written += sink.write_row(fmt.to_bytes(row))
-
-    if sink is not None:
-        sink.close()
-
-    return chunk_count
-
-
-# ── Hadoop FileSystem I/O ───────────────────────────────────────────────────
-
-
-class _HadoopRawReader(io.RawIOBase):
-    """Read-only file-like over a Hadoop FSDataInputStream, block-buffered.
-
-    Bytes are pulled from the JVM in large blocks (one py4j round-trip each)
-    via commons-io ``IOUtils.toByteArray``, sized exactly so the final block
-    never overruns EOF.
-    """
-
-    def __init__(self, jvm, stream, total_len: int, block_size: int) -> None:
-        self._jvm = jvm
-        self._stream = stream
-        self._total = total_len
-        self._block = block_size
-        self._pos = 0  # bytes pulled from JVM so far
-        self._buf = b""
-        self._bufpos = 0
-
-    def readable(self) -> bool:
-        return True
-
-    def readinto(self, b) -> int:  # type: ignore[override]
-        if self._bufpos >= len(self._buf):
-            remaining = self._total - self._pos
-            if remaining <= 0:
-                return 0
-            n = min(self._block, remaining)
-            jbytes = self._jvm.org.apache.commons.io.IOUtils.toByteArray(self._stream, int(n))
-            self._buf = bytes(jbytes)
-            self._bufpos = 0
-            self._pos += len(self._buf)
-            if not self._buf:
-                return 0
-        take = min(len(b), len(self._buf) - self._bufpos)
-        b[: take] = self._buf[self._bufpos : self._bufpos + take]
-        self._bufpos += take
-        return take
-
-    def close(self) -> None:
-        try:
-            self._stream.close()
-        except Exception:
-            log.debug("[saltmill] error closing Hadoop input stream", exc_info=True)
-        super().close()
-
-
-class _HadoopSink(Sink):
-    """Writes chunk bytes to a Hadoop FSDataOutputStream."""
-
-    def __init__(self, jvm, fs, path_obj) -> None:
-        self._jvm = jvm
-        # overwrite=True: staging dir is cleaned beforehand, but be defensive.
-        self._stream = fs.create(path_obj, True)
-
-    def write_row(self, data: bytes) -> int:
-        self._stream.write(bytearray(data))
-        return len(data)
-
-    def close(self) -> None:
-        try:
-            self._stream.close()
-        except Exception:
-            log.debug("[saltmill] error closing Hadoop output stream", exc_info=True)
-
-
 class FileSplitter:
-    """Inspects an input path and, when warranted, splits one large multiline
-    CSV file into record-aligned chunks under a staging directory."""
-
-    # 4 MB read blocks: large enough that py4j overhead is negligible.
-    _READ_BLOCK_BYTES = 4 * 1024 * 1024
+    """Inspects an input path and, when warranted, splits one large multiLine
+    CSV into N files under a staging directory — using only the DataFrame API,
+    so it runs on all cluster types."""
 
     def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
         self._spark = spark
         self._config = config
-        self._jvm = spark._jvm  # type: ignore[attr-defined]
-        sc = spark.sparkContext
-        self._hadoop_conf = sc._jsc.hadoopConfiguration()  # type: ignore[attr-defined]
-
-    def _fs_for(self, path_str: str):
-        path_obj = self._jvm.org.apache.hadoop.fs.Path(path_str)
-        return path_obj, path_obj.getFileSystem(self._hadoop_conf)
-
-    def list_data_files(self, path_str: str) -> list[tuple[str, int]]:
-        """Return (path, size_bytes) for real CSV data files at ``path_str``.
-
-        Hidden/metadata files (``_SUCCESS``, ``.crc``, ``_committed_*``) and
-        directories are excluded so a commit-protocol folder with one data
-        file is correctly seen as single-file.
-        """
-        path_obj, fs = self._fs_for(path_str)
-        if not fs.exists(path_obj):
-            return []
-        if fs.isDirectory(path_obj):
-            statuses = fs.listStatus(path_obj)
-        else:
-            statuses = fs.globStatus(path_obj)
-        if statuses is None:
-            return []
-        out: list[tuple[str, int]] = []
-        for st in statuses:
-            if st.isDirectory():
-                continue
-            name = st.getPath().getName()
-            if name.startswith(_NON_DATA_PREFIXES):
-                continue
-            out.append((st.getPath().toString(), int(st.getLen())))
-        return out
 
     def _resolve_staging_path(self) -> str:
         cfg = self._config
@@ -303,52 +101,39 @@ class FileSplitter:
         )
 
     def split(self, file_path: str, file_size: int) -> str:
-        """Split ``file_path`` into chunks under the staging dir; return that dir."""
+        """Split ``file_path`` into N files under the staging dir; return that dir."""
         cfg = self._config
         staging = self._resolve_staging_path()
         target_mb = cfg.target_chunk_size_mb or cfg.max_partition_bytes_mb
         target_bytes = target_mb * 1024 * 1024
 
-        projected = projected_chunk_count(file_size, target_bytes)
-        if projected > cfg.max_split_chunks:
+        n_chunks = projected_chunk_count(file_size, target_bytes)
+        if n_chunks > cfg.max_split_chunks:
             raise ConfigurationError(
-                f"Splitting this file at {target_mb} MB chunks would create ~{projected} "
+                f"Splitting this file at {target_mb} MB chunks would create ~{n_chunks} "
                 f"files, above max_split_chunks={cfg.max_split_chunks}. Increase "
                 "target_chunk_size_mb to avoid a small-file explosion."
             )
 
-        encoding = cfg.csv_options.get("encoding", "UTF-8")
-        has_header = str(cfg.csv_options.get("header", "false")).lower() == "true"
-        dialect = build_dialect(cfg.csv_options)
-
-        # Fresh staging dir to avoid mixing stale chunks from a prior run.
-        staging_obj, fs = self._fs_for(staging)
-        if fs.exists(staging_obj):
-            fs.delete(staging_obj, True)
-        fs.mkdirs(staging_obj)
-
-        in_obj, in_fs = self._fs_for(file_path)
-        in_stream = in_fs.open(in_obj)
-        raw = _HadoopRawReader(self._jvm, in_stream, file_size, self._READ_BLOCK_BYTES)
-        text_in = io.TextIOWrapper(io.BufferedReader(raw), encoding=encoding, newline="")
-
-        def make_sink(index: int) -> Sink:
-            chunk_path = f"{staging}/part-{index:05d}.csv"
-            chunk_obj, chunk_fs = self._fs_for(chunk_path)
-            return _HadoopSink(self._jvm, chunk_fs, chunk_obj)
-
         log.info(
-            "[saltmill] splitting single %.2f GB multiLine file into ~%d MB chunks at %s",
-            file_size / (1024 ** 3), target_mb, staging,
+            "[saltmill] splitting single %.2f GB multiLine file into %d file(s) at %s",
+            file_size / _GB, n_chunks, staging,
         )
-        try:
-            chunk_count = split_records(
-                text_in, make_sink, target_bytes, has_header, dialect, encoding
-            )
-        finally:
-            text_in.close()
 
-        log.info("[saltmill] split complete: %d chunk(s) written to %s", chunk_count, staging)
+        # Read the one file (single task under multiLine — correct parse), then
+        # repartition and write N files. Spark preserves whole records per file.
+        read_opts = {**cfg.csv_options, "inferSchema": "false"}
+        df = self._spark.read.options(**read_opts).csv(file_path)
+
+        write_opts = {k: v for k, v in cfg.csv_options.items() if k in _CSV_WRITE_OPTIONS}
+        (
+            df.repartition(n_chunks)
+            .write.mode("overwrite")
+            .options(**write_opts)
+            .csv(staging)
+        )
+
+        log.info("[saltmill] split complete: staged to %s", staging)
         return staging
 
     def maybe_split(self) -> Optional[str]:
@@ -356,8 +141,17 @@ class FileSplitter:
         staging path; otherwise return None (caller keeps the original path).
 
         Raises ConfigurationError when a single multiLine file exceeds
-        split_max_file_gb (refused up front to protect the driver)."""
-        data_files = self.list_data_files(self._config.input_path)
+        split_max_file_gb."""
+        from saltmill.spark_env import list_data_files
+
+        try:
+            data_files = list_data_files(self._spark, self._config.input_path)
+        except Exception:
+            log.debug(
+                "[saltmill] could not list input files; skipping split", exc_info=True
+            )
+            return None
+
         action, path, size = plan_split(self._config, data_files)
         if action == "skip":
             if len(data_files) > 1:
