@@ -48,18 +48,15 @@ class CsvWriter:
         return file_count
 
     def _count_output_files(self, output_path: str) -> int:
+        """Count data files written. Returns -1 if it can't be determined.
+
+        Uses the binaryFile datasource (metadata only), which works on every
+        cluster type including Spark Connect (shared/serverless).
+        """
+        from saltmill.spark_env import list_data_files
+
         try:
-            jvm = self._spark._jvm  # type: ignore[attr-defined]
-            sc = self._spark.sparkContext
-            hadoop_conf = sc._jsc.hadoopConfiguration()  # type: ignore[attr-defined]
-            path_obj = jvm.org.apache.hadoop.fs.Path(output_path)
-            fs = path_obj.getFileSystem(hadoop_conf)
-            statuses = fs.listStatus(path_obj)
-            return sum(
-                1 for s in (statuses or [])
-                if not s.isDirectory()
-                and not s.getPath().getName().startswith(("_", "."))
-            )
+            return len(list_data_files(self._spark, output_path))
         except Exception:
             log.debug("[saltmill] Could not count output files", exc_info=True)
             return -1

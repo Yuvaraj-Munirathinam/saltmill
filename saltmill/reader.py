@@ -35,21 +35,14 @@ class CsvReader:
         return df
 
     def estimate_size_gb(self) -> float:
-        """Sum file sizes via Hadoop FileSystem API. Returns 0.0 on failure."""
-        cfg = self._config
-        try:
-            jvm = self._spark._jvm  # type: ignore[attr-defined]
-            sc = self._spark.sparkContext
-            hadoop_conf = sc._jsc.hadoopConfiguration()  # type: ignore[attr-defined]
-            path_obj = jvm.org.apache.hadoop.fs.Path(cfg.input_path)
-            fs = path_obj.getFileSystem(hadoop_conf)
-            status_list = fs.globStatus(path_obj)
-            if status_list is None:
-                return 0.0
-            return sum(s.getLen() for s in status_list) / (1024**3)
-        except Exception:
-            log.debug("[saltmill] Could not estimate file size via Hadoop FS", exc_info=True)
-            return 0.0
+        """Estimate total input size in GB. Returns 0.0 on failure.
+
+        Uses the binaryFile datasource (metadata only), which works on every
+        cluster type including Spark Connect (shared/serverless).
+        """
+        from saltmill.spark_env import total_size_bytes
+
+        return total_size_bytes(self._spark, self._config.input_path) / (1024**3)
 
     def _normalize_path(self, path: str) -> str:
         stripped = path.strip()

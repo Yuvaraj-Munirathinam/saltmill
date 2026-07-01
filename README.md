@@ -270,6 +270,27 @@ Returns computed tuning parameters without reading any data.
 
 Writes a DataFrame to Delta Lake with Databricks-optimized settings.
 
+## Databricks cluster compatibility
+
+saltmill runs on **all** Databricks cluster types — single-user, job, shared,
+and serverless. The core pipeline (schema inference, cardinality/skew analysis,
+salting, and write) uses only the DataFrame API, so it works everywhere.
+
+Shared and serverless clusters run **Spark Connect**, where the driver JVM is
+sandboxed. A few auxiliary features need that JVM; when it isn't available they
+**auto-disable with a warning** rather than failing the job:
+
+| Feature | Single-user / Job | Shared / Serverless |
+|---|---|---|
+| Core pipeline (read, analyze, salt, write) | ✅ | ✅ |
+| Single large multiLine file splitting | ✅ | ✅ (Spark-native) |
+| File-size estimate & output file count | ✅ | ✅ (via `binaryFile`) |
+| Checkpointing (resumable runs) | ✅ | ⚠️ disabled (needs driver JVM) |
+| `max_runtime_seconds` watchdog | ✅ | ⚠️ disabled (needs driver JVM) |
+
+If you rely on checkpointing or the runtime watchdog, use a single-user or job
+cluster.
+
 ## Development
 
 ```bash
