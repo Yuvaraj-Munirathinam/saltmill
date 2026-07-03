@@ -26,6 +26,11 @@ class Salter:
         cfg = self._config
         salt_col = cfg.salt_column_name
 
+        if plan.target_partitions <= 0:
+            # Fast-path plan (small input): no repartition, no salt.
+            log.info("[saltmill] target_partitions<=0; returning DataFrame without salting")
+            return df
+
         if plan.salt_buckets <= 1:
             log.info(
                 "[saltmill] salt_buckets=1, repartitioning on %s into %d partitions",

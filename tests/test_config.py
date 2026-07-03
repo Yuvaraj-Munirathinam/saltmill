@@ -150,3 +150,13 @@ def test_invalid_max_runtime_seconds_raises():
 def test_valid_max_runtime_seconds():
     cfg = SaltmillConfig(input_path="/data/x.csv", max_runtime_seconds=3600)
     assert cfg.max_runtime_seconds == 3600
+
+
+def test_min_tuning_size_gb_default():
+    cfg = SaltmillConfig(input_path="/data/x.csv")
+    assert cfg.min_tuning_size_gb == 1.0
+
+
+def test_negative_min_tuning_size_raises():
+    with pytest.raises(ValueError, match="min_tuning_size_gb"):
+        SaltmillConfig(input_path="/data/x.csv", min_tuning_size_gb=-1)

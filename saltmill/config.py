@@ -94,6 +94,12 @@ class SaltmillConfig:
     # Guards against a tiny target_chunk_size producing a flood of small files.
     max_split_chunks: int = 100_000
 
+    # ── Small-file fast path ──────────────────────────────────────────────────
+    # Below this input size, skip cardinality/skew analysis and salting entirely
+    # — the tuning only adds Spark-job overhead on small data and provides no
+    # benefit. The file is read and returned directly. Set 0 to always tune.
+    min_tuning_size_gb: float = 1.0
+
     # ── Runaway-cost guardrails ───────────────────────────────────────────────
     # Optional wall-clock ceiling. When set, saltmill's Spark jobs are cancelled
     # and processing aborts if it runs longer — protects against a hung or
@@ -139,6 +145,8 @@ class SaltmillConfig:
             )
         if self.max_split_chunks < 1:
             raise ValueError("max_split_chunks must be >= 1")
+        if self.min_tuning_size_gb < 0:
+            raise ValueError("min_tuning_size_gb must be >= 0")
         if self.max_runtime_seconds is not None and self.max_runtime_seconds <= 0:
             raise ValueError("max_runtime_seconds must be > 0 when set")
         if self.write_mode.lower() not in _VALID_WRITE_MODES:

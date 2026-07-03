@@ -94,6 +94,13 @@ class SaltmillProcessor:
         with self._reporter.stage("schema_inference"):
             schema_info = self._resolve_schema(spark, checkpoint)
 
+        reader = CsvReader(spark, cfg)
+
+        # Small-file fast path: skip skew/cardinality analysis and salting — on
+        # small data the tuning is pure Spark-job overhead with no benefit.
+        if self._is_small_input(reader):
+            return self._process_small(spark, cfg, reader, schema_info, t0)
+
         configurator = SparkConfigurator(spark, cfg)
         if cfg.worker_count is None:
             cfg.worker_count = configurator.detect_worker_count()
@@ -117,7 +124,6 @@ class SaltmillProcessor:
         if sample_cached:
             sample_df.unpersist()
 
-        reader = CsvReader(spark, cfg)
         plan = self._build_plan(cfg, salt_buckets, skew_reports, reader)
 
         with self._reporter.stage("spark_configuration"):
@@ -169,6 +175,12 @@ class SaltmillProcessor:
         with self._reporter.stage("schema_inference"):
             schema_info = self._resolve_schema(spark, checkpoint=None)
 
+        reader = CsvReader(spark, cfg)
+
+        # Small-file fast path: no analysis needed.
+        if self._is_small_input(reader):
+            return self._small_plan(cfg)
+
         configurator = SparkConfigurator(spark, cfg)
         if cfg.worker_count is None:
             cfg.worker_count = configurator.detect_worker_count()
@@ -190,7 +202,6 @@ class SaltmillProcessor:
         if sample_cached:
             sample_df.unpersist()
 
-        reader = CsvReader(spark, cfg)
         return self._build_plan(cfg, salt_buckets, skew_reports, reader)
 
     # Scalar-only fields accepted from untrusted widget input.
@@ -205,7 +216,7 @@ class SaltmillProcessor:
         "checkpoint_interval", "log_level", "csv_options",
         "split_large_files", "split_threshold_gb", "target_chunk_size_mb",
         "staging_path", "split_max_file_gb", "max_split_chunks",
-        "max_runtime_seconds", "count_output_rows",
+        "max_runtime_seconds", "count_output_rows", "min_tuning_size_gb",
     })
 
     @classmethod
@@ -215,6 +226,58 @@ class SaltmillProcessor:
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
         return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
+
+    def _is_small_input(self, reader: CsvReader) -> bool:
+        """True when the input is small enough to skip tuning/salting.
+
+        Small = a known, non-zero size below min_tuning_size_gb, and no explicit
+        salt_buckets requested. A size of 0 (couldn't determine) is treated as
+        'not small' so large inputs are never silently left untuned."""
+        cfg = self._config
+        if cfg.min_tuning_size_gb <= 0 or cfg.salt_buckets is not None:
+            return False
+        size_gb = reader.estimate_size_gb()
+        small = 0 < size_gb < cfg.min_tuning_size_gb
+        if small:
+            log.info(
+                "[saltmill] input is %.4f GB (< min_tuning_size_gb=%.2f); "
+                "skipping skew analysis and salting",
+                size_gb, cfg.min_tuning_size_gb,
+            )
+        return small
+
+    def _small_plan(self, cfg: SaltmillConfig) -> PartitionPlan:
+        return PartitionPlan(
+            partition_keys=list(cfg.partition_keys or []),
+            salt_buckets=1,
+            target_partitions=0,  # 0 = no repartition on the fast path
+            shuffle_partitions=0,
+            estimated_partition_size_mb=0.0,
+            skew_reports=[],
+        )
+
+    def _process_small(self, spark, cfg, reader, schema_info, t0):
+        """Fast path: read and write without analysis or salting."""
+        plan = self._small_plan(cfg)
+        with self._reporter.stage("csv_read"):
+            full_df = reader.read(schema_info.schema)
+        if cfg.partition_keys:
+            from pyspark.sql import functions as F
+            full_df = full_df.repartition(*[F.col(k) for k in cfg.partition_keys])
+        with self._reporter.stage("write"):
+            file_count = CsvWriter(spark, cfg).write(full_df, plan)
+        total_rows = full_df.count() if cfg.count_output_rows else -1
+        return ProcessingResult(
+            input_path=cfg.input_path,
+            output_path=cfg.output_path,
+            schema_info=schema_info,
+            partition_plan=plan,
+            total_rows=total_rows,
+            total_files_written=file_count,
+            duration_seconds=time.monotonic() - t0,
+            checkpoint_used=False,
+            spark_conf_applied={},
+        )
 
     def _build_sample(self, spark, schema):
         """Build the 5% sample shared by cardinality and skew analysis.
