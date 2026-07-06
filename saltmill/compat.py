@@ -108,6 +108,26 @@ class SaltMill:
             },
         )
 
+        # Resolve the schema once (reused whether or not we tune).
+        schema_info = SchemaInferrer(self.spark, cfg).resolve()
+        reader = CsvReader(self.spark, cfg)
+
+        # Small-file fast path: skip analysis and salting — on small data the
+        # tuning only adds Spark-job overhead. Sized cheaply via binaryFile.
+        size_gb = reader.estimate_size_gb()
+        if salt_buckets is None and 0 < size_gb < cfg.min_tuning_size_gb:
+            if self.verbose:
+                print(
+                    f"[saltmill] input is {size_gb:.4f} GB "
+                    f"(< min_tuning_size_gb={cfg.min_tuning_size_gb}); "
+                    "reading without salting"
+                )
+            df = reader.read(schema_info.schema, paths=paths_list)
+            if partition_keys:
+                from pyspark.sql import functions as F
+                df = df.repartition(*[F.col(k) for k in partition_keys])
+            return df
+
         proc = SaltmillProcessor(cfg)
         plan = proc.analyze(self.spark)
 
@@ -118,10 +138,7 @@ class SaltMill:
                 f"keys={plan.partition_keys}"
             )
 
-        schema_info = SchemaInferrer(self.spark, cfg).resolve()
-        reader = CsvReader(self.spark, cfg)
         df = reader.read(schema_info.schema, paths=paths_list)
-
         salter = Salter(cfg)
         return salter.drop_salt(salter.apply(df, plan))
 

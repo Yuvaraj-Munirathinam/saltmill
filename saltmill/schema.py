@@ -78,8 +78,9 @@ class SchemaInferrer:
                 .csv(cfg.input_path)
                 .limit(cfg.schema_sample_max_rows)
             )
+            # Accessing .schema triggers inference; we deliberately avoid a
+            # separate .count() action (it only fed a log line) to save a job.
             schema = sample_df.schema
-            row_count = sample_df.count()
         except Exception as exc:
             raise SchemaInferenceError(
                 "Failed to infer schema from the configured input_path. "
@@ -89,13 +90,13 @@ class SchemaInferrer:
         nullable = [f.name for f in schema.fields if f.nullable]
         elapsed = time.monotonic() - t0
         log.info(
-            "[saltmill] schema inferred: %d columns, %d sample rows, %.2fs",
-            len(schema.fields), row_count, elapsed,
+            "[saltmill] schema inferred: %d columns, %.2fs",
+            len(schema.fields), elapsed,
         )
         return SchemaInfo(
             schema=schema,
             inferred=True,
-            sample_rows=row_count,
+            sample_rows=0,  # not counted (avoids an extra Spark job)
             inference_duration_seconds=elapsed,
             nullable_columns=nullable,
         )
