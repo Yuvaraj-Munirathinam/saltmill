@@ -60,10 +60,10 @@ class SaltmillProcessor:
         spark = self._resolve_spark(spark)
         cfg = self._config
 
-        if not cfg.output_path:
+        if not cfg.output_path and not cfg.table_name:
             from saltmill.exceptions import ConfigurationError
             raise ConfigurationError(
-                "output_path must be set before calling process(). "
+                "output_path or table_name must be set before calling process(). "
                 "Use analyze() for a dry-run without writing."
             )
 
@@ -154,7 +154,7 @@ class SaltmillProcessor:
         elapsed = time.monotonic() - t0
         return ProcessingResult(
             input_path=cfg.input_path,
-            output_path=cfg.output_path,
+            output_path=cfg.output_path or cfg.table_name or "",
             schema_info=schema_info,
             partition_plan=plan,
             total_rows=total_rows,
@@ -217,6 +217,7 @@ class SaltmillProcessor:
         "split_large_files", "split_threshold_gb", "target_chunk_size_mb",
         "staging_path", "split_max_file_gb", "max_split_chunks",
         "max_runtime_seconds", "count_output_rows", "min_tuning_size_gb",
+        "table_name", "overwrite_schema", "repartition_existing_table",
     })
 
     @classmethod
@@ -269,7 +270,7 @@ class SaltmillProcessor:
         total_rows = full_df.count() if cfg.count_output_rows else -1
         return ProcessingResult(
             input_path=cfg.input_path,
-            output_path=cfg.output_path,
+            output_path=cfg.output_path or cfg.table_name or "",
             schema_info=schema_info,
             partition_plan=plan,
             total_rows=total_rows,

@@ -77,6 +77,18 @@ class SaltmillConfig:
     write_mode: str = "overwrite"
     compression: CompressionCodec = CompressionCodec.SNAPPY
     delta_partition_columns: Optional[list[str]] = None
+    # Unity Catalog target. When set, saltmill writes via saveAsTable
+    # (catalog.schema.table) instead of a path save. Creates the table if it
+    # doesn't exist; writes into it (per write_mode) if it does. If output_path
+    # is also set, an external table is created at that location.
+    table_name: Optional[str] = None
+    # Allow overwriting the table's schema/partitioning on an overwrite write
+    # (Delta overwriteSchema). Needed to change columns or partition layout.
+    overwrite_schema: bool = False
+    # When the target table already exists with different (or no) partitioning,
+    # only change it if this is True (requires write_mode='overwrite'); otherwise
+    # the existing layout is preserved and requested partition columns are ignored.
+    repartition_existing_table: bool = False
 
     # ── Single-file splitting ─────────────────────────────────────────────────
     # When the input resolves to one large multiLine CSV (which Spark cannot
@@ -169,6 +181,11 @@ class SaltmillConfig:
             self._validate_path_scheme("checkpoint_path", self.checkpoint_path)
         if self.staging_path:
             self._validate_path_scheme("staging_path", self.staging_path)
+        if self.table_name and any(self.table_name.startswith(s) for s in _SUPPORTED_SCHEMES):
+            raise ValueError(
+                f"table_name must be a Unity Catalog name (catalog.schema.table), "
+                f"not a path: {self.table_name!r}. Use output_path for path writes."
+            )
         unknown_opts = set(self.csv_options) - _ALLOWED_CSV_OPTIONS
         if unknown_opts:
             raise ValueError(
