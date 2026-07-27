@@ -22,7 +22,7 @@ class ProgressReporter:
 
     def __init__(
         self,
-        callback: Optional[Callable[[str, float], None]] = None,
+        callback: Callable[[str, float], None] | None = None,
         log_level: str = "INFO",
     ) -> None:
         self._callback = callback

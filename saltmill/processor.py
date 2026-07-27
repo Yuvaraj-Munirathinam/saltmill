@@ -51,7 +51,7 @@ class SaltmillProcessor:
             log_level=config.log_level,
         )
 
-    def process(self, spark: Optional[SparkSession] = None) -> ProcessingResult:
+    def process(self, spark: SparkSession | None = None) -> ProcessingResult:
         """Run the full pipeline: schema → analysis → salting → write.
 
         The Spark-heavy body runs under an optional wall-clock guard
@@ -76,7 +76,7 @@ class SaltmillProcessor:
 
         from saltmill.spark_env import has_jvm
 
-        checkpoint: Optional[CheckpointManager] = None
+        checkpoint: CheckpointManager | None = None
         if cfg.checkpoint_path:
             if has_jvm(spark):
                 checkpoint = CheckpointManager(spark, cfg.checkpoint_path)
@@ -164,7 +164,7 @@ class SaltmillProcessor:
             spark_conf_applied=spark_conf,
         )
 
-    def analyze(self, spark: Optional[SparkSession] = None) -> PartitionPlan:
+    def analyze(self, spark: SparkSession | None = None) -> PartitionPlan:
         """
         Dry-run: resolve schema, detect partition keys, compute salt plan.
         Does NOT read the full file or write any output.
@@ -383,7 +383,7 @@ class SaltmillProcessor:
                 f"Processing exceeded max_runtime_seconds={seconds} and was cancelled."
             )
 
-    def _resolve_schema(self, spark: SparkSession, checkpoint: Optional[CheckpointManager]):
+    def _resolve_schema(self, spark: SparkSession, checkpoint: CheckpointManager | None):
         cfg = self._config
         inferrer = SchemaInferrer(spark, cfg)
 
@@ -431,7 +431,7 @@ class SaltmillProcessor:
         )
 
     @staticmethod
-    def _resolve_spark(spark: Optional[SparkSession]) -> SparkSession:
+    def _resolve_spark(spark: SparkSession | None) -> SparkSession:
         if spark is not None:
             return spark
         from pyspark.sql import SparkSession as SS

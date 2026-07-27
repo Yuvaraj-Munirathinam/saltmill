@@ -40,7 +40,7 @@ def _resolve_spark_type(type_hint: str):
     return _MAP[t]
 
 
-def dict_to_struct(mapping: dict[str, str]) -> "StructType":
+def dict_to_struct(mapping: dict[str, str]) -> StructType:
     """Convert a ``{"col": "type"}`` dict to a PySpark StructType (no SparkSession needed)."""
     from pyspark.sql.types import StructField, StructType
 
@@ -51,7 +51,7 @@ def dict_to_struct(mapping: dict[str, str]) -> "StructType":
 
 
 class SchemaInferrer:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
@@ -110,7 +110,7 @@ class SchemaInferrer:
             "nullable_columns": info.nullable_columns,
         })
 
-    def deserialize(self, raw: str) -> Optional[SchemaInfo]:
+    def deserialize(self, raw: str) -> SchemaInfo | None:
         _MAX_SCHEMA_BYTES = 1 * 1024 * 1024  # 1 MB
         if len(raw.encode("utf-8")) > _MAX_SCHEMA_BYTES:
             log.warning("[saltmill] cached schema blob exceeds size limit, ignoring")

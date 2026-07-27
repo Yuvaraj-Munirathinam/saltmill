@@ -17,11 +17,11 @@ _SUPPORTED_SCHEMES = ("abfss://", "abfs://", "wasbs://", "dbfs:/", "s3://", "s3a
 
 
 class CsvReader:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
-    def read(self, schema: "StructType", paths: "list[str] | None" = None) -> "DataFrame":
+    def read(self, schema: StructType, paths: list[str] | None = None) -> DataFrame:
         """Read CSV file(s). Uses config.input_path when paths is not provided."""
         cfg = self._config
         read_paths = paths or [cfg.input_path]

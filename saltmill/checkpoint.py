@@ -60,7 +60,7 @@ class CheckpointManager:
         except Exception as exc:
             log.warning("[saltmill] Could not save metadata key=%s: %s", key, exc)
 
-    def load_metadata(self, key: str) -> Optional[Any]:
+    def load_metadata(self, key: str) -> Any | None:
         _safe_name(key, "metadata key")
         path = f"{self._meta_path}/{key}.json"
         try:
@@ -105,7 +105,7 @@ class CheckpointManager:
         except Exception as exc:
             log.warning("[saltmill] _write_file failed: %s", exc)
 
-    def _read_file(self, path_str: str) -> Optional[str]:
+    def _read_file(self, path_str: str) -> str | None:
         try:
             path_obj, fs = self._hadoop_fs(path_str)
             if not fs.exists(path_obj):
