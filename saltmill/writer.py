@@ -122,7 +122,7 @@ class CsvWriter:
                     f"to change the partitioning of existing table {cfg.table_name!r}."
                 )
             log.warning(
-                "[saltmill] re-partitioning existing table %s from %s to %s (overwrite + overwriteSchema)",
+                "[saltmill] re-partitioning table %s from %s to %s (overwrite+overwriteSchema)",
                 cfg.table_name, existing or "none", requested,
             )
             return requested, True  # force overwriteSchema to change layout

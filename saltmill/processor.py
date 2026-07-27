@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING
 
 from saltmill.cardinality import CardinalityAnalyzer
 from saltmill.checkpoint import CheckpointManager
@@ -226,7 +227,8 @@ class SaltmillProcessor:
         unknown = set(d.keys()) - cls._ALLOWED_FROM_DICT_KEYS
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
-        return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
+        safe = {k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}
+        return cls(SaltmillConfig(**safe))
 
     def _is_small_input(self, reader: CsvReader) -> bool:
         """True when the input is small enough to skip tuning/salting.
@@ -354,7 +356,7 @@ class SaltmillProcessor:
                 sc.cancelJobGroup(self._JOB_GROUP)
                 log.error("[saltmill] max_runtime_seconds=%s exceeded; cancelling jobs", seconds)
             except Exception:
-                log.error("[saltmill] failed to cancel jobs on timeout", exc_info=True)
+                log.exception("[saltmill] failed to cancel jobs on timeout")
 
         try:
             sc.setJobGroup(self._JOB_GROUP, "saltmill large-CSV processing", True)

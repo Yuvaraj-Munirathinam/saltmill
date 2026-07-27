@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Callable, Generator
+from typing import ClassVar
 
 log = logging.getLogger("saltmill")
 
 
 class ProgressReporter:
-    STAGES = [
+    STAGES: ClassVar[list[str]] = [
         "file_split",
         "schema_inference",
         "cardinality_analysis",

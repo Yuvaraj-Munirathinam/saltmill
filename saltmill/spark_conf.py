@@ -70,5 +70,5 @@ class SparkConfigurator:
     def detect_cores_per_worker(self) -> int:
         try:
             return int(self._spark.conf.get("spark.executor.cores", "8"))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 8

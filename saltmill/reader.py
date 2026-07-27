@@ -13,7 +13,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("saltmill")
 
-_SUPPORTED_SCHEMES = ("abfss://", "abfs://", "wasbs://", "dbfs:/", "s3://", "s3a://", "gs://", "file://", "/")
+_SUPPORTED_SCHEMES = (
+    "abfss://", "abfs://", "wasbs://", "dbfs:/",
+    "s3://", "s3a://", "gs://", "file://", "/",
+)
 
 
 class CsvReader:

@@ -18,8 +18,15 @@ log = logging.getLogger("saltmill")
 
 def _resolve_spark_type(type_hint: str):
     from pyspark.sql.types import (
-        BooleanType, DateType, DecimalType, DoubleType,
-        FloatType, IntegerType, LongType, StringType, TimestampType,
+        BooleanType,
+        DateType,
+        DecimalType,
+        DoubleType,
+        FloatType,
+        IntegerType,
+        LongType,
+        StringType,
+        TimestampType,
     )
     _MAP = {
         "str": StringType(), "string": StringType(),
@@ -136,7 +143,7 @@ class SchemaInferrer:
                 expected_names = {f.name for f in cfg_schema.fields}
                 if cached_names != expected_names:
                     log.warning(
-                        "[saltmill] cached schema fields do not match configured schema; re-inferring"
+                        "[saltmill] cached schema fields do not match config; re-inferring"
                     )
                     return None
             return SchemaInfo(

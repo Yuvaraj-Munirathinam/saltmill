@@ -21,6 +21,9 @@ Advanced API (full pipeline with write)::
 
 from saltmill._version import __version__
 
+# ── Simple backward-compatible API ────────────────────────────────────────────
+from saltmill.compat import SaltMill, read
+
 # ── Advanced API ──────────────────────────────────────────────────────────────
 from saltmill.config import CompressionCodec, SaltmillConfig, WriteFormat
 from saltmill.exceptions import (
@@ -35,28 +38,25 @@ from saltmill.exceptions import (
 from saltmill.models import PartitionPlan, ProcessingResult, SchemaInfo, SkewReport
 from saltmill.processor import SaltmillProcessor
 
-# ── Simple backward-compatible API ────────────────────────────────────────────
-from saltmill.compat import SaltMill, read
-
 __all__ = [
-    # Advanced API
-    "SaltmillProcessor",
-    "SaltmillConfig",
-    "WriteFormat",
-    "CompressionCodec",
-    "ProcessingResult",
-    "PartitionPlan",
-    "SchemaInfo",
-    "SkewReport",
-    "SaltmillError",
-    "ConfigurationError",
-    "SchemaInferenceError",
-    "SkewDetectionError",
     "CheckpointError",
-    "UnsupportedPathError",
+    "CompressionCodec",
+    "ConfigurationError",
+    "PartitionPlan",
+    "ProcessingResult",
     "ProcessingTimeoutError",
     # Simple API
     "SaltMill",
-    "read",
+    "SaltmillConfig",
+    "SaltmillError",
+    # Advanced API
+    "SaltmillProcessor",
+    "SchemaInferenceError",
+    "SchemaInfo",
+    "SkewDetectionError",
+    "SkewReport",
+    "UnsupportedPathError",
+    "WriteFormat",
     "__version__",
+    "read",
 ]

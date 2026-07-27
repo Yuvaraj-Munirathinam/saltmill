@@ -47,10 +47,10 @@ def supports_cache(spark: SparkSession) -> bool:
         probe.count()  # forces the persist; raises on serverless
         try:
             probe.unpersist()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("[saltmill] unpersist failed (harmless)", exc_info=True)
         result = True
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.debug("[saltmill] cache/persist not supported on this session", exc_info=True)
         result = False
     _CACHE_SUPPORT[key] = result
@@ -65,7 +65,7 @@ def has_jvm(spark: SparkSession) -> bool:
     """
     try:
         return spark.sparkContext is not None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 

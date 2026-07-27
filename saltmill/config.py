@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyspark.sql.types import StructType
@@ -25,7 +26,10 @@ _ALLOWED_CSV_OPTIONS = frozenset({
     "maxColumns", "maxCharsPerColumn", "unescapedQuoteHandling",
 })
 
-_SUPPORTED_SCHEMES = ("abfss://", "abfs://", "wasbs://", "dbfs:/", "s3://", "s3a://", "gs://", "file://", "/")
+_SUPPORTED_SCHEMES = (
+    "abfss://", "abfs://", "wasbs://", "dbfs:/",
+    "s3://", "s3a://", "gs://", "file://", "/",
+)
 
 
 class WriteFormat(str, Enum):

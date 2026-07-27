@@ -42,7 +42,9 @@ _CSV_WRITE_OPTIONS = frozenset({
 })
 
 
-def plan_split(cfg: SaltmillConfig, data_files: list[tuple[str, int]]) -> tuple[str, str | None, int | None]:
+def plan_split(
+    cfg: SaltmillConfig, data_files: list[tuple[str, int]]
+) -> tuple[str, str | None, int | None]:
     """Pure split decision (no Spark/IO) so it is unit-testable.
 
     Returns one of:
