@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from saltmill.exceptions import ConfigurationError
 

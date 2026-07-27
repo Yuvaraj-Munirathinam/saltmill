@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Generator, Optional
+from typing import TYPE_CHECKING, Generator
 
 from saltmill.cardinality import CardinalityAnalyzer
 from saltmill.checkpoint import CheckpointManager

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
-from typing import Callable, Generator, Optional
+from typing import Callable, Generator
 
 log = logging.getLogger("saltmill")
 
