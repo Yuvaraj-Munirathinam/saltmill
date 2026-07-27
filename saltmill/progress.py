@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Callable, Generator, Optional
+from typing import ClassVar
 
 log = logging.getLogger("saltmill")
 
 
 class ProgressReporter:
-    STAGES = [
+    STAGES: ClassVar[list[str]] = [
         "file_split",
         "schema_inference",
         "cardinality_analysis",
@@ -22,7 +23,7 @@ class ProgressReporter:
 
     def __init__(
         self,
-        callback: Optional[Callable[[str, float], None]] = None,
+        callback: Callable[[str, float], None] | None = None,
         log_level: str = "INFO",
     ) -> None:
         self._callback = callback

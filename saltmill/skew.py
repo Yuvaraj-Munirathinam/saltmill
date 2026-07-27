@@ -17,11 +17,11 @@ _SKEW_THRESHOLD = 0.10  # top key owns >10% of rows → skewed
 
 
 class SkewDetector:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
-    def analyze(self, df: "DataFrame", partition_keys: list[str]) -> list[SkewReport]:
+    def analyze(self, df: DataFrame, partition_keys: list[str]) -> list[SkewReport]:
         """
         Analyze each partition key for data skew.
         Caller is responsible for passing a pre-sampled DataFrame;
@@ -58,7 +58,7 @@ class SkewDetector:
         return reports
 
     def _analyze_column(
-        self, df: "DataFrame", column: str, total: int
+        self, df: DataFrame, column: str, total: int
     ) -> SkewReport:
         from pyspark.sql import functions as F
 

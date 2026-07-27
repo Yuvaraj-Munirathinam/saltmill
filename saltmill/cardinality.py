@@ -18,11 +18,11 @@ _MAX_DISTINCT_FRACTION = 0.5
 
 
 class CardinalityAnalyzer:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
-    def detect_partition_keys(self, df: "DataFrame") -> list[str]:
+    def detect_partition_keys(self, df: DataFrame) -> list[str]:
         """
         Score each string/integer column by cardinality and return the top 1-2.
         Caller is responsible for passing a pre-sampled DataFrame;
@@ -48,7 +48,7 @@ class CardinalityAnalyzer:
         log.info("[saltmill] auto-selected partition keys: %s", selected)
         return selected
 
-    def _score_columns(self, df: "DataFrame", total: int) -> list[tuple[str, float]]:
+    def _score_columns(self, df: DataFrame, total: int) -> list[tuple[str, float]]:
         from pyspark.sql import functions as F
         from pyspark.sql.types import BooleanType, NumericType, StringType
 

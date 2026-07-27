@@ -31,7 +31,7 @@ _NON_DATA_PREFIXES = (".", "_")
 _CACHE_SUPPORT: dict[int, bool] = {}
 
 
-def supports_cache(spark: "SparkSession") -> bool:
+def supports_cache(spark: SparkSession) -> bool:
     """True when DataFrame.cache()/persist() works on this session.
 
     Serverless compute rejects persist with NOT_SUPPORTED_WITH_SERVERLESS
@@ -48,7 +48,7 @@ def supports_cache(spark: "SparkSession") -> bool:
         try:
             probe.unpersist()
         except Exception:
-            pass
+            log.debug("[saltmill] unpersist failed (harmless)", exc_info=True)
         result = True
     except Exception:
         log.debug("[saltmill] cache/persist not supported on this session", exc_info=True)
@@ -57,7 +57,7 @@ def supports_cache(spark: "SparkSession") -> bool:
     return result
 
 
-def has_jvm(spark: "SparkSession") -> bool:
+def has_jvm(spark: SparkSession) -> bool:
     """True when the driver JVM is directly accessible (single-user/job cluster).
 
     Returns False on Spark Connect (shared/serverless), where accessing
@@ -69,7 +69,7 @@ def has_jvm(spark: "SparkSession") -> bool:
         return False
 
 
-def list_data_files(spark: "SparkSession", path: str) -> list[tuple[str, int]]:
+def list_data_files(spark: SparkSession, path: str) -> list[tuple[str, int]]:
     """Return ``(path, size_bytes)`` for real data files at ``path``.
 
     Uses the ``binaryFile`` datasource, selecting only ``path`` and ``length``
@@ -87,7 +87,7 @@ def list_data_files(spark: "SparkSession", path: str) -> list[tuple[str, int]]:
     return out
 
 
-def total_size_bytes(spark: "SparkSession", path: str) -> int:
+def total_size_bytes(spark: SparkSession, path: str) -> int:
     """Total size in bytes of the data files at ``path`` (0 on failure)."""
     try:
         return sum(size for _, size in list_data_files(spark, path))

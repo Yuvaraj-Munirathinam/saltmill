@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from saltmill.exceptions import SchemaInferenceError
 from saltmill.models import SchemaInfo
@@ -18,8 +18,15 @@ log = logging.getLogger("saltmill")
 
 def _resolve_spark_type(type_hint: str):
     from pyspark.sql.types import (
-        BooleanType, DateType, DecimalType, DoubleType,
-        FloatType, IntegerType, LongType, StringType, TimestampType,
+        BooleanType,
+        DateType,
+        DecimalType,
+        DoubleType,
+        FloatType,
+        IntegerType,
+        LongType,
+        StringType,
+        TimestampType,
     )
     _MAP = {
         "str": StringType(), "string": StringType(),
@@ -40,7 +47,7 @@ def _resolve_spark_type(type_hint: str):
     return _MAP[t]
 
 
-def dict_to_struct(mapping: dict[str, str]) -> "StructType":
+def dict_to_struct(mapping: dict[str, str]) -> StructType:
     """Convert a ``{"col": "type"}`` dict to a PySpark StructType (no SparkSession needed)."""
     from pyspark.sql.types import StructField, StructType
 
@@ -51,7 +58,7 @@ def dict_to_struct(mapping: dict[str, str]) -> "StructType":
 
 
 class SchemaInferrer:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
@@ -110,7 +117,7 @@ class SchemaInferrer:
             "nullable_columns": info.nullable_columns,
         })
 
-    def deserialize(self, raw: str) -> Optional[SchemaInfo]:
+    def deserialize(self, raw: str) -> SchemaInfo | None:
         _MAX_SCHEMA_BYTES = 1 * 1024 * 1024  # 1 MB
         if len(raw.encode("utf-8")) > _MAX_SCHEMA_BYTES:
             log.warning("[saltmill] cached schema blob exceeds size limit, ignoring")
@@ -136,7 +143,7 @@ class SchemaInferrer:
                 expected_names = {f.name for f in cfg_schema.fields}
                 if cached_names != expected_names:
                     log.warning(
-                        "[saltmill] cached schema fields do not match configured schema; re-inferring"
+                        "[saltmill] cached schema fields do not match config; re-inferring"
                     )
                     return None
             return SchemaInfo(

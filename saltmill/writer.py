@@ -13,11 +13,11 @@ log = logging.getLogger("saltmill")
 
 
 class CsvWriter:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
-    def write(self, df: "DataFrame", plan: "PartitionPlan") -> int:
+    def write(self, df: DataFrame, plan: PartitionPlan) -> int:
         """Write the DataFrame to a path or a Unity Catalog table.
 
         Returns the number of data files written (-1 for a managed table where
@@ -29,7 +29,7 @@ class CsvWriter:
             return self._write_table(df)
         return self._write_path(df)
 
-    def _base_writer(self, df: "DataFrame", partition_cols: list, force_overwrite_schema: bool):
+    def _base_writer(self, df: DataFrame, partition_cols: list, force_overwrite_schema: bool):
         from saltmill.config import WriteFormat
 
         cfg = self._config
@@ -48,7 +48,7 @@ class CsvWriter:
             log.info("[saltmill] partitioned by %s", partition_cols)
         return writer
 
-    def _write_path(self, df: "DataFrame") -> int:
+    def _write_path(self, df: DataFrame) -> int:
         cfg = self._config
         log.info(
             "[saltmill] writing to path %s format=%s mode=%s",
@@ -60,7 +60,7 @@ class CsvWriter:
         log.info("[saltmill] write complete: ~%d files written", file_count)
         return file_count
 
-    def _write_table(self, df: "DataFrame") -> int:
+    def _write_table(self, df: DataFrame) -> int:
         cfg = self._config
         partition_cols, force_overwrite_schema = self._resolve_table_partitioning()
         writer = self._base_writer(df, partition_cols, force_overwrite_schema)
@@ -122,7 +122,7 @@ class CsvWriter:
                     f"to change the partitioning of existing table {cfg.table_name!r}."
                 )
             log.warning(
-                "[saltmill] re-partitioning existing table %s from %s to %s (overwrite + overwriteSchema)",
+                "[saltmill] re-partitioning table %s from %s to %s (overwrite+overwriteSchema)",
                 cfg.table_name, existing or "none", requested,
             )
             return requested, True  # force overwriteSchema to change layout

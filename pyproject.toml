@@ -54,6 +54,15 @@ python_files = ["test_*.py"]
 line-length = 100
 target-version = "py310"
 
+# Pin the rule set explicitly so `ruff check` is deterministic across ruff
+# versions (the default rule set drifts between releases, which caused CI to
+# flag rules that a locally-installed ruff did not).
+[tool.ruff.lint]
+# BLE (blind-except) is intentionally omitted: saltmill deliberately catches
+# broad exceptions to degrade gracefully across Databricks cluster types
+# (Spark Connect / serverless, where JVM access raises).
+select = ["E", "F", "I", "UP", "W", "B", "G", "RUF"]
+
 [tool.mypy]
 strict = true
 ignore_missing_imports = true

@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Generator, Optional
+from typing import TYPE_CHECKING
 
 from saltmill.cardinality import CardinalityAnalyzer
 from saltmill.checkpoint import CheckpointManager
@@ -51,7 +52,7 @@ class SaltmillProcessor:
             log_level=config.log_level,
         )
 
-    def process(self, spark: Optional[SparkSession] = None) -> ProcessingResult:
+    def process(self, spark: SparkSession | None = None) -> ProcessingResult:
         """Run the full pipeline: schema → analysis → salting → write.
 
         The Spark-heavy body runs under an optional wall-clock guard
@@ -76,7 +77,7 @@ class SaltmillProcessor:
 
         from saltmill.spark_env import has_jvm
 
-        checkpoint: Optional[CheckpointManager] = None
+        checkpoint: CheckpointManager | None = None
         if cfg.checkpoint_path:
             if has_jvm(spark):
                 checkpoint = CheckpointManager(spark, cfg.checkpoint_path)
@@ -164,7 +165,7 @@ class SaltmillProcessor:
             spark_conf_applied=spark_conf,
         )
 
-    def analyze(self, spark: Optional[SparkSession] = None) -> PartitionPlan:
+    def analyze(self, spark: SparkSession | None = None) -> PartitionPlan:
         """
         Dry-run: resolve schema, detect partition keys, compute salt plan.
         Does NOT read the full file or write any output.
@@ -226,7 +227,8 @@ class SaltmillProcessor:
         unknown = set(d.keys()) - cls._ALLOWED_FROM_DICT_KEYS
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
-        return cls(SaltmillConfig(**{k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}))
+        safe = {k: v for k, v in d.items() if k in cls._ALLOWED_FROM_DICT_KEYS}
+        return cls(SaltmillConfig(**safe))
 
     def _is_small_input(self, reader: CsvReader) -> bool:
         """True when the input is small enough to skip tuning/salting.
@@ -354,7 +356,7 @@ class SaltmillProcessor:
                 sc.cancelJobGroup(self._JOB_GROUP)
                 log.error("[saltmill] max_runtime_seconds=%s exceeded; cancelling jobs", seconds)
             except Exception:
-                log.error("[saltmill] failed to cancel jobs on timeout", exc_info=True)
+                log.exception("[saltmill] failed to cancel jobs on timeout")
 
         try:
             sc.setJobGroup(self._JOB_GROUP, "saltmill large-CSV processing", True)
@@ -383,7 +385,7 @@ class SaltmillProcessor:
                 f"Processing exceeded max_runtime_seconds={seconds} and was cancelled."
             )
 
-    def _resolve_schema(self, spark: SparkSession, checkpoint: Optional[CheckpointManager]):
+    def _resolve_schema(self, spark: SparkSession, checkpoint: CheckpointManager | None):
         cfg = self._config
         inferrer = SchemaInferrer(spark, cfg)
 
@@ -431,7 +433,7 @@ class SaltmillProcessor:
         )
 
     @staticmethod
-    def _resolve_spark(spark: Optional[SparkSession]) -> SparkSession:
+    def _resolve_spark(spark: SparkSession | None) -> SparkSession:
         if spark is not None:
             return spark
         from pyspark.sql import SparkSession as SS

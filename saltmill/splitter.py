@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from saltmill.exceptions import ConfigurationError
 
@@ -42,7 +42,9 @@ _CSV_WRITE_OPTIONS = frozenset({
 })
 
 
-def plan_split(cfg: "SaltmillConfig", data_files: list[tuple[str, int]]) -> tuple[str, Optional[str], Optional[int]]:
+def plan_split(
+    cfg: SaltmillConfig, data_files: list[tuple[str, int]]
+) -> tuple[str, str | None, int | None]:
     """Pure split decision (no Spark/IO) so it is unit-testable.
 
     Returns one of:
@@ -85,7 +87,7 @@ class FileSplitter:
     CSV into N files under a staging directory — using only the DataFrame API,
     so it runs on all cluster types."""
 
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
@@ -136,7 +138,7 @@ class FileSplitter:
         log.info("[saltmill] split complete: staged to %s", staging)
         return staging
 
-    def maybe_split(self) -> Optional[str]:
+    def maybe_split(self) -> str | None:
         """If the configured input warrants splitting, do it and return the
         staging path; otherwise return None (caller keeps the original path).
 

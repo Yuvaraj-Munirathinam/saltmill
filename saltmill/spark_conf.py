@@ -13,11 +13,11 @@ log = logging.getLogger("saltmill")
 
 
 class SparkConfigurator:
-    def __init__(self, spark: "SparkSession", config: "SaltmillConfig") -> None:
+    def __init__(self, spark: SparkSession, config: SaltmillConfig) -> None:
         self._spark = spark
         self._config = config
 
-    def apply(self, plan: "PartitionPlan") -> dict[str, str]:
+    def apply(self, plan: PartitionPlan) -> dict[str, str]:
         """Apply runtime Spark settings and return what was set."""
         cfg = self._config
         settings: dict[str, str] = {}

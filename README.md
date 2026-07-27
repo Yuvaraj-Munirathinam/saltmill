@@ -234,6 +234,182 @@ spark.databricks.delta.autoCompact.enabled   = true
 
 Any Spark SQL type string is also accepted directly (e.g. `"decimal(10,2)"`).
 
+## Advanced API — `SaltmillProcessor` / `SaltmillConfig`
+
+The simple `saltmill.read()` / `SaltMill` API covers most cases. Use the advanced
+API when you need full control: custom write format, checkpointing, progress
+callbacks, or access to the intermediate `PartitionPlan` and `ProcessingResult`.
+
+### Full pipeline with write
+
+```python
+from saltmill import SaltmillProcessor, SaltmillConfig, WriteFormat, CompressionCodec
+
+result = SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/*.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+    write_format=WriteFormat.DELTA,
+    compression=CompressionCodec.SNAPPY,
+    delta_partition_columns=["region"],
+    checkpoint_path="abfss://raw@myaccount.dfs.core.windows.net/_checkpoints/run1/",
+    enable_optimize_write=True,
+    enable_auto_compact=True,
+)).process(spark)
+
+print(result.partition_plan.salt_buckets)       # e.g. 64
+print(result.partition_plan.target_partitions)  # e.g. 640
+print(result.files_written)                     # number of output files
+print(result.duration_seconds)                  # total elapsed time
+```
+
+### Dry-run — inspect the plan without reading or writing
+
+```python
+from saltmill import SaltmillProcessor, SaltmillConfig
+
+plan = SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/*.csv",
+)).analyze(spark)
+
+print(plan.salt_buckets)       # auto-computed salt bucket count
+print(plan.target_partitions)  # recommended repartition target
+print(plan.partition_keys)     # auto-detected or user-supplied keys
+print(plan.shuffle_partitions) # recommended spark.sql.shuffle.partitions
+```
+
+### With a progress callback
+
+```python
+def on_progress(stage: str, pct: float) -> None:
+    print(f"{stage}: {pct:.0%}")
+
+result = SaltmillProcessor(SaltmillConfig(
+    input_path="abfss://raw@myaccount.dfs.core.windows.net/data/*.csv",
+    output_path="abfss://curated@myaccount.dfs.core.windows.net/output/delta/",
+    progress_callback=on_progress,
+    log_level="DEBUG",
+)).process(spark)
+```
+
+### From a Databricks notebook widget dict
+
+```python
+# dbutils.widgets.get() values — all strings, safe to pass via from_dict
+result = SaltmillProcessor.from_dict({
+    "input_path":  dbutils.widgets.get("input_path"),
+    "output_path": dbutils.widgets.get("output_path"),
+    "write_mode":  dbutils.widgets.get("write_mode"),
+}).process(spark)
+```
+
+### `SaltmillConfig` reference
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `input_path` | str | required | ADLS/DBFS/local path or glob |
+| `output_path` | str | `""` | Write destination (required for `process()`) |
+| `schema` | StructType / None | None | Supply schema or let saltmill infer |
+| `schema_sample_fraction` | float | `0.01` | Fraction used for schema inference |
+| `schema_sample_max_rows` | int | `100_000` | Row cap for schema inference |
+| `partition_keys` | list[str] / None | None | Force specific partition keys |
+| `cardinality_sample_fraction` | float | `0.05` | Sample fraction for cardinality analysis |
+| `salt_buckets` | int / None | auto | Override auto-computed bucket count |
+| `salt_column_name` | str | `"_salt"` | Internal salt column (dropped before write) |
+| `worker_count` | int / None | auto-detected | Override cluster worker count |
+| `cores_per_worker` | int | auto-detected | Cores per worker node |
+| `shuffle_partitions` | int / None | auto | Override `spark.sql.shuffle.partitions` |
+| `max_partition_bytes_mb` | int | `128` | `spark.sql.files.maxPartitionBytes` in MB |
+| `enable_adaptive_query` | bool | `True` | Enable Spark AQE |
+| `enable_optimize_write` | bool | `True` | Databricks Delta optimizeWrite |
+| `enable_auto_compact` | bool | `True` | Databricks Delta autoCompact |
+| `write_format` | WriteFormat | `DELTA` | `DELTA` or `PARQUET` |
+| `write_mode` | str | `"overwrite"` | `overwrite`, `append`, `ignore`, `error` |
+| `compression` | CompressionCodec | `SNAPPY` | `SNAPPY`, `ZSTD`, `GZIP`, `NONE` |
+| `delta_partition_columns` | list[str] / None | None | Delta physical partition columns |
+| `checkpoint_path` | str / None | None | Resumable run checkpoint directory |
+| `checkpoint_interval` | int | `5` | Stages between checkpoint writes |
+| `log_level` | str | `"INFO"` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `progress_callback` | Callable / None | None | `(stage, pct_float) -> None` |
+| `csv_options` | dict[str, str] | see below | Spark CSV reader options |
+
+Default `csv_options`:
+```python
+{
+    "header": "true",
+    "inferSchema": "false",
+    "mode": "PERMISSIVE",
+    "columnNameOfCorruptRecord": "_corrupt_record",
+}
+```
+
+---
+
+## Cluster auto-detection
+
+saltmill reads your cluster's configuration at runtime so you never have to
+hard-code worker counts or core sizes.
+
+### What is detected automatically
+
+| What | How | Fallback |
+|---|---|---|
+| **Worker count** | `sc.defaultParallelism ÷ cores_per_worker` | `4` |
+| **Cores per worker** | `spark.executor.cores` Spark conf | `8` |
+| **File size** | Hadoop FileSystem `globStatus` (single-user/job) or `binaryFile` datasource (shared/serverless) | `0.0 GB` — salt buckets computed from hint or capped minimum |
+| **Cache/persist support** | Probed once with `spark.range(1).cache()` | Disabled on serverless |
+| **JVM availability** | `spark.sparkContext` access attempt | Graceful degradation on Spark Connect |
+
+### How worker count drives partition tuning
+
+```
+workers          = sc.defaultParallelism ÷ spark.executor.cores
+total_cores      = workers × cores_per_worker
+target_partitions = salt_buckets × total_cores   (clamped to [200, 20 000])
+shuffle_partitions = target_partitions
+```
+
+**Example — 4-worker × 8-core cluster, 500 GB file:**
+```
+workers          = 32 ÷ 8 = 4          (defaultParallelism=32, executor.cores=8)
+salt_buckets     = 64                   (round_pow2(500 / 8))
+total_cores      = 4 × 8 = 32
+target_partitions = 64 × 32 = 2048
+```
+
+**Example — 16-worker × 8-core cluster, same file:**
+```
+workers          = 128 ÷ 8 = 16
+target_partitions = 64 × 128 = 8192
+```
+
+### Overriding auto-detection
+
+If detection gives the wrong result (e.g. driver-only notebook, autoscaling
+cluster mid-scale), you can override either value:
+
+```python
+# Simple API
+df = saltmill.read(spark, "abfss://...", workers=32)
+
+# Advanced API
+cfg = SaltmillConfig(
+    input_path="abfss://...",
+    worker_count=32,
+    cores_per_worker=8,
+)
+```
+
+### Serverless / Spark Connect clusters
+
+On Databricks **serverless** and **shared** clusters, `spark.sparkContext` raises
+because the driver JVM is sandboxed. saltmill detects this and falls back:
+
+- Worker count → defaults to `4` (override with `worker_count=N`)
+- File size → uses `binaryFile` datasource instead of Hadoop FS API
+- Checkpointing → disabled with a warning (requires driver JVM)
+
+---
+
 ## API reference
 
 ### `saltmill.read(spark, paths, *, schema, partition_col, workers, salt_buckets, num_partitions, hint_size_gb, delimiter, encoding, null_value, verbose)`

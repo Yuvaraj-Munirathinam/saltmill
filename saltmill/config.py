@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyspark.sql.types import StructType
@@ -25,7 +26,10 @@ _ALLOWED_CSV_OPTIONS = frozenset({
     "maxColumns", "maxCharsPerColumn", "unescapedQuoteHandling",
 })
 
-_SUPPORTED_SCHEMES = ("abfss://", "abfs://", "wasbs://", "dbfs:/", "s3://", "s3a://", "gs://", "file://", "/")
+_SUPPORTED_SCHEMES = (
+    "abfss://", "abfs://", "wasbs://", "dbfs:/",
+    "s3://", "s3a://", "gs://", "file://", "/",
+)
 
 
 class WriteFormat(str, Enum):
@@ -49,24 +53,24 @@ class SaltmillConfig:
     output_path: str = ""
 
     # ── Schema ────────────────────────────────────────────────────────────────
-    schema: Optional[StructType] = None
+    schema: StructType | None = None
     schema_sample_fraction: float = 0.01
     schema_sample_max_rows: int = 100_000
 
     # ── Partition keys ────────────────────────────────────────────────────────
-    partition_keys: Optional[list[str]] = None
+    partition_keys: list[str] | None = None
     cardinality_sample_fraction: float = 0.05
 
     # ── Salting ───────────────────────────────────────────────────────────────
-    salt_buckets: Optional[int] = None
+    salt_buckets: int | None = None
     salt_column_name: str = "_salt"
 
     # ── Cluster ───────────────────────────────────────────────────────────────
-    worker_count: Optional[int] = None
+    worker_count: int | None = None
     cores_per_worker: int = 8
 
     # ── Spark tuning ──────────────────────────────────────────────────────────
-    shuffle_partitions: Optional[int] = None
+    shuffle_partitions: int | None = None
     max_partition_bytes_mb: int = 128
     enable_optimize_write: bool = True
     enable_auto_compact: bool = True
@@ -76,12 +80,12 @@ class SaltmillConfig:
     write_format: WriteFormat = WriteFormat.DELTA
     write_mode: str = "overwrite"
     compression: CompressionCodec = CompressionCodec.SNAPPY
-    delta_partition_columns: Optional[list[str]] = None
+    delta_partition_columns: list[str] | None = None
     # Unity Catalog target. When set, saltmill writes via saveAsTable
     # (catalog.schema.table) instead of a path save. Creates the table if it
     # doesn't exist; writes into it (per write_mode) if it does. If output_path
     # is also set, an external table is created at that location.
-    table_name: Optional[str] = None
+    table_name: str | None = None
     # Allow overwriting the table's schema/partitioning on an overwrite write
     # (Delta overwriteSchema). Needed to change columns or partition layout.
     overwrite_schema: bool = False
@@ -97,8 +101,8 @@ class SaltmillConfig:
     # inputs or non-multiLine reads (Spark splits those natively).
     split_large_files: bool = True
     split_threshold_gb: float = 1.0
-    target_chunk_size_mb: Optional[int] = None  # defaults to max_partition_bytes_mb
-    staging_path: Optional[str] = None  # falls back to <checkpoint_path>/_saltmill_split
+    target_chunk_size_mb: int | None = None  # defaults to max_partition_bytes_mb
+    staging_path: str | None = None  # falls back to <checkpoint_path>/_saltmill_split
     # Upper bound on driver-side splitting. The split reads the file serially on
     # the driver, so a single file larger than this is refused (fail fast) rather
     # than tying up the driver for hours — pre-split such inputs upstream.
@@ -116,18 +120,18 @@ class SaltmillConfig:
     # Optional wall-clock ceiling. When set, saltmill's Spark jobs are cancelled
     # and processing aborts if it runs longer — protects against a hung or
     # runaway action burning cluster time indefinitely. None = no limit.
-    max_runtime_seconds: Optional[int] = None
+    max_runtime_seconds: int | None = None
     # The final row count re-evaluates the written data (an extra full pass when
     # not checkpointed). Disable to skip it; ProcessingResult.total_rows is then -1.
     count_output_rows: bool = True
 
     # ── Fault tolerance ───────────────────────────────────────────────────────
-    checkpoint_path: Optional[str] = None
+    checkpoint_path: str | None = None
     checkpoint_interval: int = 5
 
     # ── Observability ─────────────────────────────────────────────────────────
     log_level: str = "INFO"
-    progress_callback: Optional[Callable[[str, float], None]] = None
+    progress_callback: Callable[[str, float], None] | None = None
 
     # ── Advanced CSV options ──────────────────────────────────────────────────
     csv_options: dict[str, str] = field(
